@@ -88,9 +88,19 @@ def loadRepdLookup():
     
     return repd_lookup
 
+def convertToKilometers(value):
+    if value is None: return None
+    return int(value) / 1000
+
 def getNearestTurbineStats(position, guid, start_date):
 
-    resultsNearestTurbineBuilt = postgisGetResults(""""
+    if start_date.strip() == '': return {
+        'NearestTurbineBuilt': None,
+        'NearestTurbinePlanned': None,
+        'NearestTurbineRejected': None
+    }
+
+    resultsNearestTurbineBuilt = postgisGetResults("""
     SELECT 
     MIN
     (
@@ -109,9 +119,9 @@ def getNearestTurbineStats(position, guid, start_date):
     """, (AsIs(position['lng']), AsIs(position['lat']), guid, start_date, ))
 
     if len(resultsNearestTurbineBuilt) == 0: resultsNearestTurbineBuilt = None
-    else: resultsNearestTurbineBuilt = resultsNearestTurbineBuilt[0][0] 
+    else: resultsNearestTurbineBuilt = convertToKilometers(resultsNearestTurbineBuilt[0][0])
 
-    resultsNearestTurbinePlanned = postgisGetResults(""""
+    resultsNearestTurbinePlanned = postgisGetResults("""
     SELECT 
     MIN
     (
@@ -130,9 +140,9 @@ def getNearestTurbineStats(position, guid, start_date):
     """, (AsIs(position['lng']), AsIs(position['lat']), guid, start_date, ))
 
     if len(resultsNearestTurbinePlanned) == 0: resultsNearestTurbinePlanned = None
-    else: resultsNearestTurbinePlanned = resultsNearestTurbinePlanned[0][0] 
+    else: resultsNearestTurbinePlanned = convertToKilometers(resultsNearestTurbinePlanned[0][0])
 
-    resultsNearestTurbineRejected = postgisGetResults(""""
+    resultsNearestTurbineRejected = postgisGetResults("""
     SELECT 
     MIN
     (
@@ -151,20 +161,20 @@ def getNearestTurbineStats(position, guid, start_date):
     """, (AsIs(position['lng']), AsIs(position['lat']), guid, start_date, ))
 
     if len(resultsNearestTurbineRejected) == 0: resultsNearestTurbineRejected = None
-    else: resultsNearestTurbineRejected = resultsNearestTurbineRejected[0][0] 
+    else: resultsNearestTurbineRejected = convertToKilometers(resultsNearestTurbineRejected[0][0])
 
     return {
-        'NearestTurbineBuilt': resultsNearestTurbineBuilt / 1000,
-        'NearestTurbinePlanned': resultsNearestTurbinePlanned / 1000,
-        'NearestTurbineRejected': resultsNearestTurbineRejected / 1000
+        'NearestTurbineBuilt': resultsNearestTurbineBuilt,
+        'NearestTurbinePlanned': resultsNearestTurbinePlanned,
+        'NearestTurbineRejected': resultsNearestTurbineRejected
     }
 
 def getAuthority(position):
     pass
 
 
-file_input = 'finaldata_dontchange.csv'
-file_output = 'TurbineFullInfo_New.csv'
+file_input = 'finaldata.csv'
+file_output = 'TurbineFullInfo_NewData.csv'
 file_repd = 'repd-q3-oct-2024.csv'
 
 field_conversion = {
@@ -257,7 +267,15 @@ output_data = []
 with open(file_input, 'r', newline='') as csvfile:
     reader = csv.DictReader(csvfile)
     index = 0
+    
     for row in reader:
+
+        # if index < 2100:
+        #     index += 1
+        #     continue
+
+        # print(index)
+
         output_row = {}
         easting, northing = lnglat_to_bngrs(float(row['turbine_lnglat_lng']), float(row['turbine_lnglat_lat']))
         row['distance__power_lines__uk'] = float(row['distance__power_lv_lines__uk'])
@@ -271,17 +289,19 @@ with open(file_input, 'r', newline='') as csvfile:
         capacity = repd_lookup[row['project_guid']]['Installed Capacity (MWelec)']
         nearestTurbineStats = getNearestTurbineStats({'lng': float(row['turbine_lnglat_lng']), 'lat': float(row['turbine_lnglat_lat'])}, row['project_guid'], row['project_date_end'])
 
-        size = 'Large'
-        if float(capacity) < 1: size = 'Small'
+        size = 'Small'
+        if (capacity.strip() != ''):
+            if (float(capacity) >= 1): size = 'Large'
         if status_summary is None: continue
 
         for key in field_conversion.keys():
             if key == 'Status.Summary': output_row[key] = status_summary
             if key == 'Size': output_row[key] = size
             if key == 'year': 
-                output_row[key] = repd_lookup[row['project_guid']]['Planning Application Submitted'][6:10]            
+                # project_date_end is date of last planning application decision - and so most relevant to prediction
+                output_row[key] = row['project_date_end'][0:4]
                 output_row['yearCategory'] = 'Before 2010'
-                if int(output_row['year']) > 2010: output_row['yearCategory'] = '2010 Onwards'
+                if (output_row['year'] == '') or (int(output_row['year']) > 2010): output_row['yearCategory'] = '2010 Onwards'
             if key == 'Year': output_row[key] = output_row['year']
             if key == 'Planning_Status_Summary': output_row[key] = Planning_Status_Summary[output_row['Status.Summary']]
             if key == 'QualLevel4':
@@ -297,30 +317,33 @@ with open(file_input, 'r', newline='') as csvfile:
                 socgrdAB += float(row['occupation_3_associate_professional_proportional'])	
                 output_row['SocGrdAB'] = 100 * socgrdAB
             if 'NearestTurbine' in key: output_row[key] = nearestTurbineStats[key]
+            if key == 'Country':
+                if row[field_conversion[key]].strip() != repd_lookup[row['project_guid']]['Country']:
+                    print("Record's country (according to coordinates) does not match REPD version of Country - potential manual data error. Index:", index, row['project_guid'])
 
             if field_conversion[key] != '':
                 converted_field = field_conversion[key]
 
-                if converted_field == 'SPECIALCASE': continue
+                if converted_field == 'ZERO': output_row[key] = 0
+                if converted_field == 'BLANK': output_row[key] = ''
 
-                if converted_field == 'ZERO': 
-                    output_row[key] = 0
-                    continue
-                if converted_field == 'BLANK':
-                    output_row[key] = ''
-                    continue
+                if converted_field not in ['SPECIALCASE', 'ZERO', 'BLANK']:
+                    if converted_field.startswith("REPD:"):
+                        converted_field = converted_field.replace('REPD:', '')
+                        output_row[key] = repd_lookup[row['project_guid']][converted_field]
+                    else:
+                        output_row[key] = row[converted_field]
 
-                if converted_field.startswith("REPD:"):
-                    converted_field = converted_field.replace('REPD:', '')
-                    output_row[key] = repd_lookup[row['project_guid']][converted_field]
-                else:
-                    output_row[key] = row[converted_field]
+                        # If political share, convert proportion to percentage
+                        if ('_share' in key) or (key == 'SNP_PC_sha'): 
+                            if (output_row[key].strip() == ''): output_row[key] = 0
+                            else: output_row[key] = 100 * float(output_row[key])
+                        
+                        # If 'distance__' then convert metres to kilometres
+                        if 'distance__' in converted_field: output_row[key] = float(output_row[key]) / 1000
 
-                    # If political share, convert proportion to percentage
-                    if ('_share' in key) or (key == 'SNP_PC_sha'): output_row[key] = 100 * float(output_row[key])
-                    
-                    # If 'distance__' then convert metres to kilometres
-                    if 'distance__' in converted_field: output_row[key] = float(output_row[key]) / 1000
+            if key in ['Under.Construction', 'Operational']:
+                if output_row[key] == '': output_row[key] = 'NA'
 
         if index % 100 == 0:
             print("Computed", index)
@@ -328,7 +351,7 @@ with open(file_input, 'r', newline='') as csvfile:
         output_data.append(output_row)
         index += 1
 
-        if index > 10: break
+        # if index > 10: break
 
 with open(file_output, 'w', newline='') as csvfile:
     fieldnames = output_data[0].keys()

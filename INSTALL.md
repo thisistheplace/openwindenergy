@@ -18,7 +18,7 @@
 
 ## Docker and Local (non-Docker) installs
 
-The Open Wind toolkit has two flavours of build process:
+The Open Wind Energy toolkit has two flavours of build process:
 
 - **1. Docker-based**: The entire build is run within Docker instances. This is the recommended option as it helps avoid installation issues.
 
@@ -28,7 +28,7 @@ The Open Wind toolkit has two flavours of build process:
 
 Installation instructions for Windows (11+ only), Mac OS and Ubuntu are provided below. For other platforms, we recommend you install Docker and run the **Docker-based install** (see [2. All platforms - Docker-based install](#2-all-platforms---docker-based-install---build---view). 
 
-If you have specific success or issues running the Open Wind toolkit on other platforms, please drop us an email at support@openwind.energy
+If you have specific success or issues running the Open Wind Energy toolkit on other platforms, please drop us an email at support@openwind.energy
 
 Next steps:
 
@@ -48,14 +48,14 @@ Download and install Docker Desktop application from https://www.docker.com/
 
 ## 1b. Windows - Local (non-Docker) based install
 
-The recommended way to run Open Wind on Windows in non-Docker mode is to install the [Windows Subsystem for Linux](https://learn.microsoft.com/en-us/windows/wsl/about) and use Ubuntu installation instructions.  
+The recommended way to run Open Wind Energy on Windows in non-Docker mode is to install the [Windows Subsystem for Linux](https://learn.microsoft.com/en-us/windows/wsl/about) and use Ubuntu installation instructions.  
 
-Follow the instructions below to install `Windows Subsystem for Linux (WSL)`. In the event of problems installing `WSL`, consult [Microsoft WSL Troubleshooting](https://learn.microsoft.com/en-us/windows/wsl/troubleshooting)
+Follow the instructions below to install `Windows Subsystem for Linux (WSL)`. In the event of problems installing `WSL`, consult [Microsoft WSL Troubleshooting](https://learn.microsoft.com/en-us/windows/wsl/troubleshooting).
 
 ### Installing Windows Subsystem for Linux
-Go to Windows `Start` and search for `Turn Windows features on or off`. Click the tickbox next to `Windows Subsystem for Linux`. Reboot your computer when prompted.
+Go to Windows `Start` and search for `Turn Windows features on or off`. Click the tickbox next to `Windows Subsystem for Linux`. Restart your computer when prompted.
 
-Once computer has rebooted, go to Windows `Start`, search for `Windows PowerShell` and select `Run as Administrator`. You should see:
+Once computer has restarted, go to Windows `Start`, search for `Windows PowerShell` and select `Run as Administrator`. You should see:
 ```
 Windows PowerShell
 Copyright (C) Microsoft Corporation. All rights reserved.
@@ -159,13 +159,13 @@ sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin dock
 
 ## 2. All platforms - Docker-based install -> Build -> View
 
-Clone the Open Wind repository:
+Clone the Open Wind Energy repository:
 ```
-git clone https://github.com/open-wind/openwind.git
-cd openwind
+git clone https://github.com/open-wind/openwindenergy.git
+cd openwindenergy
 ```
 
-Run the Open Wind build stage (Docker-based mode) by typing:
+Run the Open Wind Energy build stage (Docker-based mode) by typing:
 
 ```
 ./build-docker.sh
@@ -187,7 +187,7 @@ For example:
 ./build-docker.sh 149.9
 ``` 
 
-Once the build has completed (10-20 hours), view the final Open Wind constraint layers by running:
+Once the build has completed (10-20 hours), view the final Open Wind Energy constraint layers by running:
 
 ```
 ./run-docker.sh
@@ -302,11 +302,11 @@ Check `togeosjon` has installed correctly by typing:
 togeojson
 ```
 
-### Clone Open Wind project repository:
+### Clone Open Wind Energy project repository:
 
 ```
-git clone https://github.com/open-wind/openwind.git
-cd openwind
+git clone https://github.com/open-wind/openwindenergy.git
+cd openwindenergy
 ```
 
 Copy environment file template `.env-template` to `.env` and activate a Python 3.9 virtual environment:
@@ -328,7 +328,7 @@ Install correct version of `GDAL` Python module so it exactly matches installed 
 pip3 install gdal==`gdal-config --version`
 ```
 
-### Install Python modules required for Open Wind
+### Install Python modules required for Open Wind Energy
 ```
 pip3 install -r requirements.txt
 pip3 install git+https://github.com/hotosm/osm-export-tool-python --no-deps
@@ -393,7 +393,7 @@ ModuleNotFoundError: No module named 'qgis' <-- **** ERROR IF INCORRECT QGIS_PYT
 If you see a "Cannot find proj.db" error message, you will need to set the `QGIS_PROJ_DATA` environment variable in `.env` to the folder of your `PROJ` library containing `proj.db`:
 
 ```
-PROJ_DATA=/path/to/proj/
+QGIS_PROJ_DATA=/path/to/proj/
 ```
 
 To find potential values for `QGIS_PROJ_DATA`, type:
@@ -427,7 +427,7 @@ from qgis.core import (QgsProject)
 This should load the `qgis.core` Python module without generating errors. If so, press `CTRL-D` to quit QGIS Python and continue with the installation process.
 
 ### Set up PostGIS
-Enter the commands below to set up a new PostGIS database for Open Wind:
+Enter the commands below to set up a new PostGIS database for Open Wind Energy:
 
 ```
 sudo service postgresql restart
@@ -439,7 +439,7 @@ sudo -u postgres psql -d openwind -c 'GRANT ALL PRIVILEGES ON DATABASE openwind 
 
 When prompted for a database user password, enter `password` - or enter a different password and edit the `POSTGRES_PASSWORD` variable in the `.env` file accordingly.
 
-The Open Wind toolkit also needs to access PostGIS using a standard `md5` password. Therefore edit PostgreSQL's `pg_hba.conf` file to allow `md5` password access:
+The Open Wind Energy toolkit also needs to access PostGIS using a standard `md5` password. Therefore edit PostgreSQL's `pg_hba.conf` file to allow `md5` password access:
 
 ```
 sudo nano /etc/postgresql/[REPLACE WITH POSTGRES VERSION]/main/pg_hba.conf
@@ -498,14 +498,14 @@ Note: you may experience problems building openmaptiles fonts. If so, you can sk
 
 This will instruct the build process to skip attempting an install of openmaptiles fonts and will use a CDN (pre-built) version of fonts instead.
 
-After attempting to install openmaptiles fonts, ensure you are in the main Open Wind directory:
+After attempting to install openmaptiles fonts, ensure you are in the main Open Wind Energy directory:
 
 ```
 cd ..
 
 [or] 
 
-cd /path/to/openwind/
+cd /path/to/openwindenergy/
 ```
 
 
@@ -515,7 +515,7 @@ cd /path/to/openwind/
 
 ## 5. All Platforms - Local (non-Docker) install -> Build -> View
 
-To run the Open Wind build stage in **Local (non-Docker)** mode, type:
+To run the Open Wind Energy build stage in **Local (non-Docker)** mode, type:
 
 ```
 ./build-cli.sh
@@ -537,7 +537,7 @@ For example:
 ./build-cli.sh 149.9
 ``` 
 
-Once the build has completed (10-20 hours), view the final Open Wind constraint layers by running:
+Once the build has completed (10-20 hours), view the final Open Wind Energy constraint layers by running:
 
 ```
 ./run-cli.sh

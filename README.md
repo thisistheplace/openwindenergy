@@ -1,6 +1,6 @@
-# Open Wind
+# Open Wind Energy
 
-The Open Wind toolkit builds and displays onshore wind turbine site constraints in a fully automated way - avoiding the need for manually downloading and processing multiple GIS datasets by hand. 
+The Open Wind Energy toolkit builds and displays onshore wind turbine site constraints in a fully automated way - avoiding the need for manually downloading and processing multiple GIS datasets by hand. 
 
 It is designed to save time and lower the barrier to entry for onshore wind site identification for the following users:
 
@@ -35,8 +35,8 @@ For an overview of how the toolkit works, see ['How it works'](#how-it-works), b
 Install [Docker](https://docker.com) then run:
 
 ```
-git clone https://github.com/open-wind/openwind.git
-cd openwind
+git clone https://github.com/open-wind/openwindenergy.git
+cd openwindenergy
 ./build-docker.sh
 ```
 
@@ -55,15 +55,15 @@ http://localhost:8000
 
 This will display the following map:
 
-## Open Wind site constraints map
+## Open Wind Energy site constraints map
 
-![Open Wind Site Constraints Map](/openwind-image-map.png)
+![Open Wind Energy Site Constraints Map](/openwind-image-map.png)
 
 This map is also available at [https://map.openwind.energy](https://map.openwind.energy). 
 
 The map uses vanilla Javascript, [MapLibre-GL](https://github.com/maplibre/maplibre-gl-js) and [TileServer-GL](https://github.com/maptiler/tileserver-gl) and is straightforward to modify by a developer with basic HTML / Javascript skills. 
 
-Note: the live map has been produced using the Open Wind toolkit with no changes to the underlying source code or HTML.
+Note: the live map has been produced using the Open Wind Energy toolkit with no changes to the underlying source code or HTML.
 
 ## Installation 
 
@@ -71,7 +71,7 @@ See [INSTALL.md](INSTALL.md).
 
 ## Turbine-specific wind site constraints
 
-By default the Open Wind toolkit creates onshore wind site constraints for turbines with a height to tip of **124.2 metres** - the average height to tip of all failed and successful pre-2025 wind turbine planning applications according to Open Wind's research. 
+By default the Open Wind Energy toolkit creates onshore wind site constraints for turbines with a height to tip of **124.2 metres** - the average height to tip of all failed and successful pre-2025 wind turbine planning applications according to Open Wind Energy's research. 
 
 To create wind site constraints for different turbines, add the height to tip value to the `build-docker.sh` prompt:
 
@@ -101,7 +101,7 @@ Note: **[HEIGHT TO TIP]** parameter should only be a number - so remove `m`, `me
 
 ## Minimum platform requirements
 
-To run the Open Wind build process, you will need a computer with the following minimum configuration:
+To run the Open Wind Energy build process, you will need a computer with the following minimum configuration:
 
 - 16Gb memory
 - 80Gb hard disk
@@ -116,7 +116,7 @@ To improve performance, PostGIS should be run on an optimized platform, eg. a hi
 Output files will be created in `build-cli/` or `build-docker/` and will be located in the following folders:
 
 ### `output`
-Contains Open Wind output files for each final data layer. Each layer will have a `GeoJSON`, `ESRI Shapefile` and `GeoPackage` version. 
+Contains Open Wind Energy output files for each final data layer. Each layer will have a `GeoJSON`, `ESRI Shapefile` and `GeoPackage` version. 
 
 Files will be called either `tipheight-...` or `latest-...`: 
 
@@ -146,7 +146,7 @@ Contains all downloaded [osm-export-tool](https://github.com/hotosm/osm-export-t
 
 - `geonode-upload.py`: Uploads post-build datasets to local copy of GeoNode created through `geonode-build.sh`. 
 
-Note: due to raster-based focus of GeoNode / GeoServer together with the complexity of final Open Wind datasets, a high performance computer is recommended to run GeoNode with Open Wind constraint layers.
+Note: due to raster-based focus of GeoNode / GeoServer together with the complexity of final Open Wind Energy datasets, a high performance computer is recommended to run GeoNode with Open Wind Energy constraint layers.
 
 ## Command line parameters
 The toolkit accepts the following optional command line arguments:
@@ -207,7 +207,7 @@ There are also **optional** environment variables that can be set in `.env`:
 ## How it works
 
 ### 1. Download latest definition of onshore wind site constraints
-The toolkit downloads the latest definition of onshore wind site constraints, including recommended buffers, from the Open Wind [CKAN](https://ckan.org/) open data portal [data.openwind.energy](https://data.openwind.energy). 
+The toolkit downloads the latest definition of onshore wind site constraints, including recommended buffers, from the Open Wind Energy [CKAN](https://ckan.org/) open data portal [data.openwind.energy](https://data.openwind.energy). 
 
 The definition contains updated information about where to locate the required datasets as well as higher level information about how to organise, process and amalgamate datasets once they have been downloaded. 
 
@@ -238,7 +238,7 @@ national_parks__wales__pro
 national_parks__northern_ireland__pro
 ```
 
- The toolkit then amalgamates tables by *group*, as defined in the Open Wind open data portal [data.openwind.energy](https://data.openwind.energy) (see, for example, the group [Landscape and visual impacts](https://data.openwind.energy/group/landscape-and-visual-impacts)). 
+ The toolkit then amalgamates tables by *group*, as defined in the Open Wind Energy open data portal [data.openwind.energy](https://data.openwind.energy) (see, for example, the group [Landscape and visual impacts](https://data.openwind.energy/group/landscape-and-visual-impacts)). 
  
 The following tables, for example, will be amalgamated to create the table `tipheight_any__landscape_and_visual_impacts`:
 
@@ -266,7 +266,7 @@ Install and run [QGIS](https://qgis.org/) and load exported QGIS file at `[build
 
 ## Generalizing to other use cases
 
-While the Open Wind toolkit was specifically designed for onshore wind, the same codebase can be used to convert any CKAN data portal into final GIS layers for other use cases - for example solar farms, battery storage or green hydrogen. 
+While the Open Wind Energy toolkit was specifically designed for onshore wind, the same codebase can be used to convert any CKAN data portal into final GIS layers for other use cases - for example solar farms, battery storage or green hydrogen. 
 
 To change the source CKAN open data portal the toolkit uses, set the `CKAN_URL` in the `.env` environment file:
 
@@ -278,7 +278,7 @@ You can also add custom fields to the CKAN instance that modify toolkit processi
 
 ### Open Data Portal ([CKAN](https://ckan.org/)) Custom Fields
 
-The following custom fields are used within the [CKAN](https://ckan.org/) [Open Wind Data Portal](https://data.openwind.energy) to describe how datasets should be processed by the Open Wind toolkit:
+The following custom fields are used within the [CKAN](https://ckan.org/) [Open Wind Energy Data Portal](https://data.openwind.energy) to describe how datasets should be processed by the Open Wind Energy toolkit:
 
 | Field | Value | Example | Description |
 | ----------- | ----------- | ----------- | ----------- |
@@ -297,8 +297,8 @@ https://openwind.energy
 
 ## Copyright
 
-Open Wind Toolkit  
-Copyright (c) Open Wind, 2025  
+Open Wind Energy Toolkit  
+Copyright (c) Open Wind Energy, 2025  
 Released under MIT License  
 
 Developed by Stefan Haselwimmer  

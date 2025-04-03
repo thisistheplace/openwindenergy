@@ -621,7 +621,6 @@ def postgisImportDatasetGIS(dataset_path, dataset_table, orig_srs='EPSG:4326'):
                             dataset_path, \
                             "-overwrite", \
                             "-nln", dataset_table, \
-                            "-nlt", 'POLYGON', \
                             "--config", "OGR_PG_ENABLE_METADATA=NO", \
                             "-lco", "GEOMETRY_NAME=geom", \
                             "-lco", "OVERWRITE=YES", \
@@ -750,6 +749,8 @@ def postgisGetBasicUnprocessedTables():
     table_name NOT LIKE 'tipheight_%%' AND 
     table_name NOT LIKE '%%clipping%%' AND 
     table_name NOT LIKE '_scratch%%' AND
+    table_name NOT LIKE 'temp_%%' AND
+    table_name NOT LIKE 'test_%%' AND
     table_name NOT LIKE 'sitepredictor__%%' AND 
     table_name NOT LIKE '%%__3857';
     """, (POSTGRES_DB, ))
