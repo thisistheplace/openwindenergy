@@ -217,7 +217,6 @@ See [Open Data Portal (CKAN) Custom Fields](#open-data-portal-ckan-custom-fields
 The toolkit downloads open source datasets from third party websites, eg. Historic England or OpenDataNI, and imports them into PostGIS. The range of data formats the toolkit currently supports include:
 
 - `GeoJSON`
-- `ESRI Shapefile`
 - `GeoPackage`
 - `ArcGIS`
 - `WFS`

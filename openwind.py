@@ -1332,6 +1332,7 @@ def downloaddatasets_singlepass(ckanurl, output_folder):
             temp_output_file = 'temp.geojson'
             output_file = join(output_folder, f'{dataset_title}.geojson')
             output_gpkg_file = join(output_folder, f'{dataset_title}.gpkg')
+            zip_folder = output_folder + dataset_title + '/'
 
             # If export file(s) already exists, then skip to next record
             if isfile(output_file) or isfile(output_gpkg_file): continue
@@ -1343,7 +1344,6 @@ def downloaddatasets_singlepass(ckanurl, output_folder):
                 url_basename = basename(dataset['url'])
                 kml_file = output_folder + dataset_title + '.kml'
                 kmz_file = output_folder + dataset_title + '.kmz'
-                zip_folder = output_folder + dataset_title + '/'
 
                 if url_basename[-4:] == '.kml':
                     attemptDownloadUntilSuccess(dataset['url'], kml_file)
@@ -1421,9 +1421,7 @@ def downloaddatasets_singlepass(ckanurl, output_folder):
                 response = requests.get(url)
                 result = xmltodict.parse(response.text)
 
-                # For some reason WFS @numberMatched is always 1 bigger than actual number
-
-                totalrecords = int(result['wfs:FeatureCollection']['@numberMatched']) - 1
+                totalrecords = int(result['wfs:FeatureCollection']['@numberMatched'])
                 batchsize = int(result['wfs:FeatureCollection']['@numberReturned'])
 
                 # If batchsize is 0, suggests that there is no limit so attempt to load all records
@@ -1452,15 +1450,22 @@ def downloaddatasets_singlepass(ckanurl, output_folder):
 
                     LogMessage("--> Downloading: " + str(startIndex + 1) + " to " + str(startIndex + recordstodownload))
                     
-                    dataframe_new = gpd.read_file(wfs_request_url).set_crs(crs)
+                    try:
+                        dataframe_new = gpd.read_file(wfs_request_url).set_crs(crs)
 
-                    if dataframe is None: dataframe = dataframe_new
-                    else: dataframe = pd.concat([dataframe, dataframe_new])
+                        if dataframe is None: dataframe = dataframe_new
+                        else: dataframe = pd.concat([dataframe, dataframe_new])
 
-                    recordsdownloaded += recordstodownload
-                    startIndex += recordstodownload
+                        recordsdownloaded += recordstodownload
+                        startIndex += recordstodownload
 
-                    if recordsdownloaded >= totalrecords: break
+                        if recordsdownloaded >= totalrecords: break
+                    except:
+                        LogMessage("--> Unable to download records - possible incorrect record count from WFS [numberMatched:" + str(totalrecords) + ", numberReturned:" + str(batchsize) + "] - retrying with reduced number")
+
+                        recordstodownload -= 1
+                        totalrecords -= 1
+                        if recordstodownload == 0: break
 
                 dataframe.to_file(temp_output_file)
 
@@ -1473,7 +1478,23 @@ def downloaddatasets_singlepass(ckanurl, output_folder):
             elif dataset['type'] == 'GeoJSON':
 
                 LogMessage("Downloading GeoJSON: " + feature_name)
-                attemptDownloadUntilSuccess(dataset['url'], temp_output_file)
+
+                # Handle non-zipped or zipped version of GeoJSON
+
+                if dataset['url'][-4:] != '.zip':
+                    attemptDownloadUntilSuccess(dataset['url'], temp_output_file)
+                else:
+                    zip_file = output_folder + dataset_title + '.zip'
+                    attemptDownloadUntilSuccess(dataset['url'], zip_file)
+                    with ZipFile(zip_file, 'r') as zip_ref: zip_ref.extractall(zip_folder)
+                    os.remove(zip_file)
+
+                    if isdir(zip_folder):
+                        unzipped_files = getFilesInFolder(zip_folder)
+                        for unzipped_file in unzipped_files:
+                            if (unzipped_file[-8:] == '.geojson'):
+                                shutil.copy(zip_folder + unzipped_file, temp_output_file)
+                        shutil.rmtree(zip_folder)
 
             elif dataset['type'] == "ArcGIS GeoServices REST API":
 
@@ -1802,6 +1823,7 @@ def processdownloads(output_folder):
                             "-lco", "GEOMETRY_NAME=geom", \
                             "-lco", "OVERWRITE=YES", \
                             "-nln", core_dataset_name, \
+                            "-skipfailures", \
                             "-s_srs", orig_srs, \
                             "-t_srs", WORKING_CRS]
 

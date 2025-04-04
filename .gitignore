@@ -8,6 +8,7 @@ log.txt
 *.gpkg
 *.gpkg-journal
 *.qmd
+*.tif
 britain-and-ireland-latest.osm.pbf
 app/node_modules
 build-cli/
