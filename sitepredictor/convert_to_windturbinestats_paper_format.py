@@ -314,7 +314,6 @@ with open(file_input, 'r', newline='') as csvfile:
                 socgrdAB = 0
                 socgrdAB += float(row['occupation_1_managers_proportional'])
                 socgrdAB += float(row['occupation_2_professional_proportional'])	
-                socgrdAB += float(row['occupation_3_associate_professional_proportional'])	
                 output_row['SocGrdAB'] = 100 * socgrdAB
             if 'NearestTurbine' in key: output_row[key] = nearestTurbineStats[key]
             if key == 'Country':

@@ -33,6 +33,12 @@ sitepredictor/finaldata_viewshed_firstattempt.csv
 sitepredictor/repd-q3-oct-2024.csv
 sitepredictor/TurbineFullInfo_NewData.csv
 sitepredictor/finaldatal_dontchange_v2.csv
+sitepredictor/automl.py
+sitepredictor/finaldata_old/
+sitepredictor/finaldata_postbugfix.csv
+sitepredictor/h2o_model/
+sitepredictor/household_power_consumption.txt
+sitepredictor/testdata_works.csv
 test.kml
 testtippecanoe.py
 openmaptiles-fonts/
