@@ -377,17 +377,17 @@ If you need to modify the environment variables in `.env` script - for example t
 
 There are also **optional** environment variables that can be set in `.env`:
 
-- `BUILD_FOLDER`: Absolute path to build folder where datasets will be downloaded and output files created. This will replace the default `build-cli/` or `build-docker/` build folder.
+- `BUILD_FOLDER`: Absolute path to build folder where datasets will be downloaded and output files created. This will replace the default `build-cli/` build folder. *Note: only used if local (non-Docker) build.*
 
 - `TILESERVER_URL`: URL of [TileServer GL](https://github.com/maptiler/tileserver-gl) instance where you will host your mbtiles, eg. `https://tiles.openwind.energy`. This variable is used when creating the MapLibre-GL test site in `[build-directory]/app/index.html` and the related TileServer-GL `*.json` style files in `[build-directory]/tileserver/styles/`.
 
-- `GEONODE_BASE_URL`: URL of GeoNode instance to use when uploading data to GeoNode instance through `geonode-upload.sh`.
+- `GEONODE_BASE_URL`: URL of GeoNode instance to use when uploading data to GeoNode instance through `geonode-upload.sh`. *Note: only used if local (non-Docker) build.*
 
-- `GEOSERVER_BASE_URL`: URL of GeoServer instance to use when uploading data to GeoNode instance through `geonode-upload.sh`.
+- `GEOSERVER_BASE_URL`: URL of GeoServer instance to use when uploading data to GeoNode instance through `geonode-upload.sh`. *Note: only used if local (non-Docker) build.*
 
-- `ADMIN_USERNAME`: Username of GeoNode user to use when uploading data to GeoNode instance through `geonode-upload.sh`.
+- `ADMIN_USERNAME`: Username of GeoNode user to use when uploading data to GeoNode instance through `geonode-upload.sh`. *Note: only used if local (non-Docker) build.*
 
-- `ADMIN_PASSWORD`: Password of GeoNode user to use when uploading data to GeoNode instance through `geonode-upload.sh`.
+- `ADMIN_PASSWORD`: Password of GeoNode user to use when uploading data to GeoNode instance through `geonode-upload.sh`. *Note: only used if local (non-Docker) build.*
 
 ## How it works
 

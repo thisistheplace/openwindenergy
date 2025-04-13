@@ -88,6 +88,8 @@ OSM_MAIN_DOWNLOAD               = 'https://download.geofabrik.de/europe/united-k
 OSM_CONFIG_FOLDER               = BUILD_FOLDER + 'osm-export-yml/'
 OSM_DOWNLOADS_FOLDER            = BUILD_FOLDER + 'osm-downloads/'
 OSM_EXPORT_DATA                 = 'osm-export'
+OSM_BOUNDARIES_GPKG             = BUILD_FOLDER + 'osm-boundaries.gpkg'
+OSM_BOUNDARIES_YML              = 'osm-boundaries.yml'
 DATASETS_DOWNLOADS_FOLDER       = BUILD_FOLDER + 'datasets-downloads/'
 OSM_LOOKUP                      = BUILD_FOLDER + 'datasets-osm.json'
 STRUCTURE_LOOKUP                = BUILD_FOLDER + 'datasets-structure.json'
@@ -123,7 +125,6 @@ POSTGRES_PASSWORD               = os.environ.get("POSTGRES_PASSWORD")
 DEBUG_RUN                       = False
 OPENMAPTILES_HOSTED_FONTS       = "https://cdn.jsdelivr.net/gh/open-wind/openmaptiles-fonts/fonts/{fontstack}/{range}.pbf"
 SKIP_FONTS_INSTALLATION         = False
-OSM_BOUNDARIES                  = 'osm-boundaries.gpkg'
 CKAN_USER_AGENT                 = 'ckanapi/1.0 (+https://openwind.energy)'
 
 # Lookup to convert internal areas to OSM names
@@ -2005,22 +2006,37 @@ def initPipeline():
     Carry out tasks essential to subsequent tasks
     """
 
-    global OSM_BOUNDARIES
+    global OSM_MAIN_DOWNLOAD, OSM_BOUNDARIES_GPKG, OSM_BOUNDARIES_YML
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, WORKING_CRS
 
     postgisDropLegacyTables()
 
-    osm_boundaries_table = reformatTableNameIgnoreCustom(OSM_BOUNDARIES)
-    osm_boundaries_projection = getGPKGProjection(OSM_BOUNDARIES)
+    osm_boundaries_table = reformatTableNameIgnoreCustom(OSM_BOUNDARIES_GPKG)
+
+    # If OSM_BOUNDARIES_GPKG file doesn't exist, carry out OSM download using default OSM specification 
+    # (before any custom configuration) and run osm-export-tool on osm-boundaries.yml to generate OSM_BOUNDARIES_GPKG
+
+    if not isfile(OSM_BOUNDARIES_GPKG):
+
+        osmDownloadData()
+
+        LogMessage("Generating " + basename(OSM_BOUNDARIES_GPKG) + " from " + OSM_MAIN_DOWNLOAD)
+
+        runSubprocess([ "osm-export-tool", \
+                        OSM_DOWNLOADS_FOLDER + basename(OSM_MAIN_DOWNLOAD), \
+                        OSM_BOUNDARIES_GPKG.replace('.gpkg', ''), \
+                        "-m", OSM_BOUNDARIES_YML ])
+
+    osm_boundaries_projection = getGPKGProjection(OSM_BOUNDARIES_GPKG)
 
     if not postgisCheckTableExists(osm_boundaries_table):
 
-        LogMessage("Importing into PostGIS: " + OSM_BOUNDARIES)
+        LogMessage("Importing into PostGIS: " + basename(OSM_BOUNDARIES_GPKG))
 
         subprocess_list = [ "ogr2ogr", \
                             "-f", "PostgreSQL", \
                             'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
-                            OSM_BOUNDARIES, \
+                            OSM_BOUNDARIES_GPKG, \
                             "-makevalid", \
                             "-overwrite", \
                             "-lco", "GEOMETRY_NAME=geom", \
@@ -2034,14 +2050,14 @@ def initPipeline():
 
 def getCountryFromArea(area):
     """
-    Determine country that area is in using OSM_BOUNDARIES
+    Determine country that area is in using OSM_BOUNDARIES_GPKG
     """
 
-    global OSM_BOUNDARIES
+    global OSM_BOUNDARIES_GPKG
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, WORKING_CRS
     global OSM_NAME_CONVERT
 
-    osm_boundaries_table = reformatTableNameIgnoreCustom(OSM_BOUNDARIES)
+    osm_boundaries_table = reformatTableNameIgnoreCustom(OSM_BOUNDARIES_GPKG)
     countries = [OSM_NAME_CONVERT[country] for country in OSM_NAME_CONVERT.keys()]
 
     results = postgisGetResults("""
@@ -2074,7 +2090,7 @@ def runProcessingOnDownloads(output_folder):
     """
 
     global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_OUT_PREFIX
-    global DEBUG_RUN, HEIGHT_TO_TIP, WORKING_CRS, BUILD_FOLDER, OSM_MAIN_DOWNLOAD, OSM_EXPORT_DATA, OSM_BOUNDARIES
+    global DEBUG_RUN, HEIGHT_TO_TIP, WORKING_CRS, BUILD_FOLDER, OSM_MAIN_DOWNLOAD, OSM_EXPORT_DATA, OSM_BOUNDARIES_GPKG
     global FINALLAYERS_OUTPUT_FOLDER, FINALLAYERS_CONSOLIDATED, OVERALL_CLIPPING_FILE, REGENERATE_INPUT, REGENERATE_OUTPUT
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
     global OUTPUT_GRID_SPACING, OUTPUT_GRID_TABLE
@@ -2181,21 +2197,21 @@ def runProcessingOnDownloads(output_folder):
             
         else:
 
-            LogMessage("Importing into PostGIS: Custom clipping boundaries " + ",".join(clipping) + " from " + OSM_BOUNDARIES)
+            LogMessage("Importing into PostGIS: Custom clipping boundaries " + ",".join(clipping) + " from " + OSM_BOUNDARIES_GPKG)
 
-            osm_boundaries_projection = getGPKGProjection(OSM_BOUNDARIES)
+            osm_boundaries_projection = getGPKGProjection(OSM_BOUNDARIES_GPKG)
 
             runSubprocess([ "ogr2ogr", \
                             "-f", "PostgreSQL", \
                             'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
-                            OSM_BOUNDARIES, \
+                            OSM_BOUNDARIES_GPKG, \
                             "-overwrite", \
                             "-nln", clipping_table, \
                             "-lco", "GEOMETRY_NAME=geom", \
                             "-lco", "OVERWRITE=YES", \
                             "-dialect", "sqlite", \
                             "-sql", \
-                            "SELECT * FROM '" + OSM_BOUNDARIES.replace('.gpkg', '') + "' WHERE name IN (" + ",".join(clipping) + ")", \
+                            "SELECT * FROM '" + OSM_BOUNDARIES_GPKG.replace('.gpkg', '') + "' WHERE name IN (" + ",".join(clipping) + ")", \
                             "-s_srs", osm_boundaries_projection, \
                             "-t_srs", WORKING_CRS, \
                             "-clipsrc", OVERALL_CLIPPING_FILE])

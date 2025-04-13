@@ -45,6 +45,8 @@ services:
       POSTGRES_USER: $POSTGRES_USER
       POSTGRES_PASSWORD: $POSTGRES_PASSWORD 
       BUILD_FOLDER: "build-docker/"
+      CKAN_URL: $CKAN_URL
+      TILESERVER_URL: $TILESERVER_URL
     build:
       context: .
       dockerfile: openwind-build.dockerfile

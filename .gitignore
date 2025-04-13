@@ -22,6 +22,7 @@ tilemaker/
 coastline/
 fonts/
 landcover/
+configuration/custom-test.yml
 uk-clipping.gpkg-shm
 uk-clipping.gpkg-wal
 sitepredictor/finaldata.csv
@@ -65,6 +66,4 @@ sitepredictor/testchatgpt.py
 sitepredictor/testviewshed.py
 sitepredictor/finaldata_dontchange.csv
 
-!uk--clipping.gpkg
 !overall-clipping.gpkg
-!osm-boundaries.gpkg

@@ -83,7 +83,8 @@ COPY build-cli.sh .
 RUN chmod +x build-cli.sh
 COPY openwind.py .
 COPY build-qgis.py .
-COPY uk--clipping.gpkg .
+COPY overall-clipping.gpkg .
+COPY osm-boundaries.yml .
 COPY .env-template .
 
 CMD ["/bin/bash"]
