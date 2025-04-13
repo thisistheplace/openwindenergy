@@ -66,3 +66,5 @@ sitepredictor/testviewshed.py
 sitepredictor/finaldata_dontchange.csv
 
 !uk--clipping.gpkg
+!overall-clipping.gpkg
+!osm-boundaries.gpkg
