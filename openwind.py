@@ -1,5 +1,5 @@
 # ***********************************************************
-# *********************** OPEN WIND *************************
+# ********************* OPEN WIND ENERGY ******************** 
 # ***********************************************************
 # ********** Script to convert data.openwind.energy *********
 # ********** data catalogue to composite GIS layers *********
@@ -11,7 +11,7 @@
 #
 # MIT License
 #
-# Copyright (c) Stefan Haselwimmer, WeWantWind.org, 2025
+# Copyright (c) Stefan Haselwimmer, OpenWind.energy, 2025
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -80,8 +80,13 @@ if os.environ.get("TILESERVER_URL") is not None: TILESERVER_URL = os.environ.get
 
 DEFAULT_HEIGHT_TO_TIP           = 124.2 # Based on openwind's own manual data on all failed and successful UK onshore wind projects
 HEIGHT_TO_TIP                   = DEFAULT_HEIGHT_TO_TIP
+CUSTOM_CONFIGURATION            = None
+CUSTOM_CONFIGURATION_FOLDER     = BUILD_FOLDER + 'configuration/'
+CUSTOM_CONFIGURATION_PREFIX     = '__'
+CUSTOM_CONFIGURATION_OUT_PREFIX = 'custom--'
 OSM_MAIN_DOWNLOAD               = 'https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf'
 OSM_CONFIG_FOLDER               = BUILD_FOLDER + 'osm-export-yml/'
+OSM_DOWNLOADS_FOLDER            = BUILD_FOLDER + 'osm-downloads/'
 OSM_EXPORT_DATA                 = 'osm-export'
 DATASETS_DOWNLOADS_FOLDER       = BUILD_FOLDER + 'datasets-downloads/'
 OSM_LOOKUP                      = BUILD_FOLDER + 'datasets-osm.json'
@@ -109,7 +114,7 @@ FINALLAYERS_CONSOLIDATED        = 'windconstraints'
 PERFORM_DOWNLOAD                = True
 REGENERATE_INPUT                = False
 REGENERATE_OUTPUT               = False
-OVERALL_CLIPPING_FILE           = 'uk--clipping.gpkg'
+OVERALL_CLIPPING_FILE           = 'overall-clipping.gpkg'
 WORKING_CRS                     = 'EPSG:4326'
 POSTGRES_HOST                   = os.environ.get("POSTGRES_HOST")
 POSTGRES_DB                     = os.environ.get("POSTGRES_DB")
@@ -118,6 +123,18 @@ POSTGRES_PASSWORD               = os.environ.get("POSTGRES_PASSWORD")
 DEBUG_RUN                       = False
 OPENMAPTILES_HOSTED_FONTS       = "https://cdn.jsdelivr.net/gh/open-wind/openmaptiles-fonts/fonts/{fontstack}/{range}.pbf"
 SKIP_FONTS_INSTALLATION         = False
+OSM_BOUNDARIES                  = 'osm-boundaries.gpkg'
+CKAN_USER_AGENT                 = 'ckanapi/1.0 (+https://openwind.energy)'
+
+# Lookup to convert internal areas to OSM names
+
+OSM_NAME_CONVERT                = \
+                                {
+                                    'england': 'England',
+                                    'wales': 'Cymru / Wales',
+                                    'scotland': 'Alba / Scotland',
+                                    'northern-ireland': 'Northern Ireland / Tuaisceart Éireann'
+                                }
 
 # Output grid is used to cut up final output into grid squares 
 # in order to improve quality and performance of rendering 
@@ -185,7 +202,7 @@ def attemptDownloadUntilSuccess(url, file_path):
         try:
             urllib.request.urlretrieve(url, file_path)
             return
-        except:
+        except Exception as e:
             LogError("Attempt to retrieve " + url + " failed so retrying")
             time.sleep(5)
 
@@ -198,7 +215,7 @@ def attemptGETUntilSuccess(url):
         try:
             response = requests.get(url)
             return response
-        except:
+        except Exception as e:
             LogError("Attempt to retrieve " + url + " failed so retrying")
             time.sleep(5)
 
@@ -248,13 +265,14 @@ def osmDownloadData():
     Downloads core OSM data
     """
 
-    global  BUILD_FOLDER, OSM_MAIN_DOWNLOAD, TILEMAKER_DOWNLOAD_SCRIPT, TILEMAKER_COASTLINE, TILEMAKER_LANDCOVER, TILEMAKER_COASTLINE_CONFIG
+    global  BUILD_FOLDER, OSM_MAIN_DOWNLOAD, OSM_DOWNLOADS_FOLDER, TILEMAKER_DOWNLOAD_SCRIPT, TILEMAKER_COASTLINE, TILEMAKER_LANDCOVER, TILEMAKER_COASTLINE_CONFIG
 
     makeFolder(BUILD_FOLDER)
+    makeFolder(OSM_DOWNLOADS_FOLDER)
 
-    if not isfile(BUILD_FOLDER + basename(OSM_MAIN_DOWNLOAD)):
-        LogMessage("Downloading latest OSM data for United Kingdom")
-        runSubprocess(["wget", OSM_MAIN_DOWNLOAD, "-O", BUILD_FOLDER + basename(OSM_MAIN_DOWNLOAD)])
+    if not isfile(OSM_DOWNLOADS_FOLDER + basename(OSM_MAIN_DOWNLOAD)):
+        LogMessage("Downloading latest OSM data")
+        runSubprocess(["wget", OSM_MAIN_DOWNLOAD, "-O", OSM_DOWNLOADS_FOLDER + basename(OSM_MAIN_DOWNLOAD)])
 
     LogMessage("Checking all files required for OSM tilemaker...")
 
@@ -357,7 +375,29 @@ def postgisGetAllTables():
     table_catalog=%s AND 
     table_schema='public' AND 
     table_type='BASE TABLE' AND
-    table_name NOT IN ('spatial_ref_sys');
+    table_name NOT IN ('spatial_ref_sys')
+    ORDER BY table_name;
+    """, (POSTGRES_DB, ))
+
+def postgisGetCustomTables():
+    """
+    Gets list of all custom configuration tables in database
+    """
+
+    global CUSTOM_CONFIGURATION_PREFIX
+
+    custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace('_', '\_')
+
+    return postgisGetResults("""
+    SELECT tables.table_name
+    FROM information_schema.tables
+    WHERE 
+    table_catalog=%s AND 
+    table_schema='public' AND 
+    table_type='BASE TABLE' AND
+    table_name NOT IN ('spatial_ref_sys') AND 
+    table_name LIKE '""" + custom_configuration_prefix_escape + """%%' 
+    ORDER BY table_name;
     """, (POSTGRES_DB, ))
 
 def postgisGetDerivedTables():
@@ -379,9 +419,31 @@ def postgisGetDerivedTables():
     table_type='BASE TABLE' AND
     table_name NOT IN ('spatial_ref_sys') AND
     (
-        (table_name LIEK '%%__buf') OR 
-        (table_name LIKE '%%__pro') OR 
+        (table_name LIKE '%%\_\_buf') OR 
+        (table_name LIKE '%%\_\_pro') OR 
         (table_name LIKE 'tipheight%%') 
+    )
+    ORDER BY table_name;
+    """, (POSTGRES_DB, ))
+
+def postgisGetLegacyTables():
+    """
+    Gets list of all legacy tables in database
+    """
+
+    # Legacy tables:
+    # public_roads_a_and_b_roads_and_motorways__uk
+
+    return postgisGetResults("""
+    SELECT tables.table_name
+    FROM information_schema.tables
+    WHERE 
+    table_catalog=%s AND 
+    table_schema='public' AND 
+    table_type='BASE TABLE' AND
+    table_name NOT IN ('spatial_ref_sys') AND
+    (
+        (table_name LIKE 'public_roads_a_and_b_roads_and_motorways__uk%%')
     );
     """, (POSTGRES_DB, ))
 
@@ -419,6 +481,18 @@ def postgisDropAllTables():
         table_name, = table
         postgisDropTable(table_name)
 
+def postgisDropCustomTables():
+    """
+    Drops all custom configuration tables in schema
+    """
+
+    customtables = postgisGetCustomTables()
+
+    for table in customtables:
+        table_name, = table
+        LogMessage(" --> Dropping custom table: " + table_name)
+        postgisDropTable(table_name)
+
 def postgisDropDerivedTables():
     """
     Drops all derived tables in schema
@@ -430,6 +504,18 @@ def postgisDropDerivedTables():
 
     for table in derivedtables:
         table_name, = table
+        postgisDropTable(table_name)
+
+def postgisDropLegacyTables():
+    """
+    Drops all legacy tables in schema
+    """
+
+    legacytables = postgisGetLegacyTables()
+
+    for table in legacytables:
+        table_name, = table
+        LogMessage("Removing legacy table: " + table_name)
         postgisDropTable(table_name)
 
 def postgisDropAmalgamatedTables():
@@ -627,11 +713,17 @@ def reformatDatasetName(datasettitle):
     - Replaces ' - ' with double hyphen
     - Replaces _ with hyphen
     - Standardises local variations in dataset names, eg. 'Areas of Special Scientific Interest' (Northern Ireland) -> 'Sites of Special Scientific Interest'
+    - For specific very long dataset names, eg. 'Public roads, A and B roads and motorways', shorten as this breaks PostGIS when adding prefixes/suffixes
+    - Remove CUSTOM_CONFIGURATION_PREFIX
     """
+
+    global CUSTOM_CONFIGURATION_PREFIX
 
     datasettitle = normalizeTitle(datasettitle)
     datasettitle = datasettitle.replace('.geojson', '').replace('.gpkg', '')
+    datasettitle = removeCustomConfigurationPrefix(datasettitle)
     reformatted_name = datasettitle.lower().replace(' - ', '--').replace(' ','-').replace('_','-').replace('(', '').replace(')', '')
+    reformatted_name = reformatted_name.replace('public-roads-a-and-b-roads-and-motorways', 'public-roads-a-b-motorways')
     reformatted_name = reformatted_name.replace('areas-of-special-scientific-interest', 'sites-of-special-scientific-interest')
     reformatted_name = reformatted_name.replace('conservation-area-boundaries', 'conservation-areas')
     reformatted_name = reformatted_name.replace('scheduled-historic-monument-areas', 'scheduled-ancient-monuments')
@@ -657,12 +749,27 @@ def normalizeTitle(title):
 
     return title
 
-def reformatTableName(name):
+def reformatTableNameIgnoreCustom(name):
     """
     Reformats names, eg. dataset names, to be compatible with Postgres
     """
 
     return name.replace('.gpkg', '').replace("-", "_")
+
+def reformatTableName(name):
+    """
+    Reformats names, eg. dataset names, to be compatible with Postgres
+    Also adds in CUSTOM_CONFIGURATION_PREFIX in case we're using custom configuration file§
+    """
+
+    global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_PREFIX
+
+    table = reformatTableNameIgnoreCustom(name)
+    
+    if CUSTOM_CONFIGURATION is not None:
+        if not table.startswith(CUSTOM_CONFIGURATION_PREFIX): table = CUSTOM_CONFIGURATION_PREFIX + table
+
+    return table
 
 def getDatasetReadableTitle(dataset):
     """
@@ -712,6 +819,21 @@ def buildUnionTableName(layername):
 
     return reformatTableName(layername) + '__union'
 
+def removeCustomConfigurationPrefix(layername):
+    """
+    Remove CUSTOM_CONFIGURATION_PREFIX if set
+    """
+
+    global CUSTOM_CONFIGURATION_PREFIX
+
+    custom_configuration_prefix_table_style = CUSTOM_CONFIGURATION_PREFIX.replace('-', '_')
+    custom_configuration_prefix_dataset_style = CUSTOM_CONFIGURATION_PREFIX.replace('_', '-')
+
+    if layername.startswith(custom_configuration_prefix_table_style): layername = layername[len(custom_configuration_prefix_table_style):]
+    elif layername.startswith(custom_configuration_prefix_dataset_style): layername = layername[len(custom_configuration_prefix_dataset_style):]
+
+    return layername
+
 def buildFinalLayerTableName(layername):
     """
     Builds final layer table name
@@ -721,10 +843,11 @@ def buildFinalLayerTableName(layername):
     global HEIGHT_TO_TIP
 
     dataset_parent = getDatasetParent(layername)
-
-    if isTurbineHeightDependent(dataset_parent):
-        return "tipheight_" + formatValue(HEIGHT_TO_TIP).replace(".", "_") + "m__" + reformatTableName(dataset_parent)
-    return "tipheight_any__" + reformatTableName(dataset_parent)
+    dataset_parent_no_custom = removeCustomConfigurationPrefix(dataset_parent)
+    
+    if isTurbineHeightDependent(dataset_parent_no_custom):
+        return reformatTableName("tipheight_" + formatValue(HEIGHT_TO_TIP).replace(".", "_") + "m__" + reformatTableNameIgnoreCustom(dataset_parent_no_custom))
+    return reformatTableName("tipheight_any__" + reformatTableNameIgnoreCustom(dataset_parent_no_custom))
 
 def formatValue(value):
     """
@@ -797,9 +920,17 @@ def getTableParent(table_name):
     """
     Gets table parent name from table name
     Parent = 'description', eg 'national_parks'
+    If using custom configuration, table parent will include 
     """
 
-    return "__".join(table_name.split("__")[0:1])
+    global CUSTOM_CONFIGURATION
+
+    parent_table = "__".join(table_name.split("__")[0:1])
+
+    if CUSTOM_CONFIGURATION is not None: parent_table = "__".join(table_name.split("__")[0:2])
+
+    return parent_table
+
 
 # ***********************************************************
 # ********** Application data structure functions ***********
@@ -810,9 +941,13 @@ def deleteDatasetFiles(dataset):
     Deletes all files specifically relating to dataset
     """
 
+    global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_OUT_PREFIX
     global HEIGHT_TO_TIP, DATASETS_DOWNLOADS_FOLDER, FINALLAYERS_OUTPUT_FOLDER, TILESERVER_DATA_FOLDER
 
     possible_extensions = ['geojson', 'gpkg', 'shp', 'shx', 'dbf', 'prj', 'sld', 'mbtiles']
+
+    custom_configuration_prefix = ''
+    if CUSTOM_CONFIGURATION is not None: custom_configuration_prefix = CUSTOM_CONFIGURATION_OUT_PREFIX
 
     table = reformatTableName(dataset)
     height_to_tip_text = formatValue(HEIGHT_TO_TIP).replace('.', '-') + 'm'
@@ -822,8 +957,8 @@ def deleteDatasetFiles(dataset):
         possible_files = []
         possible_files.append(DATASETS_DOWNLOADS_FOLDER + dataset_basename)
         possible_files.append(FINALLAYERS_OUTPUT_FOLDER + latest_basename)
-        possible_files.append(FINALLAYERS_OUTPUT_FOLDER + 'tipheight-any--' + dataset_basename)
-        possible_files.append(FINALLAYERS_OUTPUT_FOLDER + 'tipheight-' + height_to_tip_text + '--' + dataset_basename)
+        possible_files.append(FINALLAYERS_OUTPUT_FOLDER + custom_configuration_prefix + 'tipheight-any--' + dataset_basename)
+        possible_files.append(FINALLAYERS_OUTPUT_FOLDER + custom_configuration_prefix + 'tipheight-' + height_to_tip_text + '--' + dataset_basename)
         possible_files.append(TILESERVER_DATA_FOLDER + latest_basename)
 
         for possible_file in possible_files:
@@ -876,7 +1011,7 @@ def isSpecificDatasetHeightDependent(dataset_name):
 
     buffer_lookup = getBufferLookup()
     if dataset_name in buffer_lookup:
-        buffer_value = buffer_lookup[dataset_name]
+        buffer_value = str(buffer_lookup[dataset_name])
         if 'height-to-tip' in buffer_value: return True
     return False
 
@@ -964,21 +1099,25 @@ def generateStructureLookups(ckanpackages):
     Generates structure JSON lookup files including style files for map app
     """
 
-    global BUILD_FOLDER, MAPAPP_FOLDER, STRUCTURE_LOOKUP, MAPAPP_JS, HEIGHT_TO_TIP, FINALLAYERS_CONSOLIDATED
+    global CUSTOM_CONFIGURATION, BUILD_FOLDER, MAPAPP_FOLDER, STRUCTURE_LOOKUP, MAPAPP_JS, HEIGHT_TO_TIP, FINALLAYERS_CONSOLIDATED
 
     makeFolder(BUILD_FOLDER)
     makeFolder(MAPAPP_FOLDER)
 
     structure_lookup = {}
+    configuration = ''
+    if CUSTOM_CONFIGURATION is not None: configuration = CUSTOM_CONFIGURATION['configuration']
+
     style_items = [
     {
         "title": "All constraint layers",
         "color": "darkgrey",
-        "dataset": "latest--" + FINALLAYERS_CONSOLIDATED,
+        "dataset": getFinalLayerLatestName(FINALLAYERS_CONSOLIDATED),
         "level": 1,
         "children": [],
         "defaultactive": False,
-        'height-to-tip': formatValue(HEIGHT_TO_TIP)
+        'height-to-tip': formatValue(HEIGHT_TO_TIP),
+        'configuration': configuration
     }]
 
     for ckanpackage in ckanpackages.keys():
@@ -1024,7 +1163,11 @@ def generateStructureLookups(ckanpackages):
             if layer_parent not in structure_hierarchy_lookup[ckanpackage]: structure_hierarchy_lookup[ckanpackage][layer_parent] = []
             structure_hierarchy_lookup[ckanpackage][layer_parent].append(dataset)
 
-    javascript_content = 'var openwind_structure = ' + json.dumps({'tipheight': formatValue(HEIGHT_TO_TIP), 'datasets': style_items}, indent=4) + ';'
+    javascript_content = 'var openwind_structure = ' + json.dumps({\
+        'tipheight': formatValue(HEIGHT_TO_TIP), \
+        'configuration': configuration, \
+        'datasets': style_items\
+    }, indent=4) + ';'
 
     with open(STRUCTURE_LOOKUP, "w") as json_file: json.dump(structure_hierarchy_lookup, json_file, indent=4)
     with open(STYLE_LOOKUP, "w") as json_file: json.dump(style_items, json_file, indent=4)
@@ -1080,6 +1223,19 @@ def getStyleLookup():
 
     return getJSON(STYLE_LOOKUP)
 
+def getStructureDatasets():
+    """
+    Gets flat list of all datasets in structure
+    """
+
+    structure_lookup = getStructureLookup()
+    datasets = []
+    for group in structure_lookup.keys():
+        for parent in structure_lookup[group].keys():
+            for child in structure_lookup[group][parent]: datasets.append(child)
+
+    return datasets
+
 def getDatasetBuffer(datasetname):
     """
     Gets buffer for dataset 'datasetname'
@@ -1090,14 +1246,18 @@ def getDatasetBuffer(datasetname):
     buffer_lookup = getBufferLookup()
     if datasetname not in buffer_lookup: return None
 
-    buffer = buffer_lookup[datasetname]
-    if '* height-to-tip' in buffer:
-        # Ideally we have more complex parser to allow complex evaluations
-        # but allow 'BUFFER * height-to-tip' for now
-        buffer = buffer.replace('* height-to-tip','')
-        buffer = HEIGHT_TO_TIP * float(buffer)
-    else:
-        buffer = float(buffer)
+    try:
+        buffer = str(buffer_lookup[datasetname])
+        if '* height-to-tip' in buffer:
+            # Ideally we have more complex parser to allow complex evaluations
+            # but allow 'BUFFER * height-to-tip' for now
+            buffer = buffer.replace('* height-to-tip','').strip()
+            buffer = HEIGHT_TO_TIP * float(buffer)
+        else:
+            buffer = float(buffer)
+    except:
+        LogError("Problem with buffer value for " + datasetname + ", possible error in configuration file. Is it a single element without '-'?")
+        exit()
 
     return formatValue(buffer)
 
@@ -1105,13 +1265,14 @@ def getDatasetBuffer(datasetname):
 # ************** Application logic functions ****************
 # ***********************************************************
 
-def getckanpackages(ckanurl):
+def getCKANPackages(ckanurl):
     """
     Downloads CKAN archive
     """
 
-    ua = 'ckanapiexample/1.0 (+https://wewantwind.org)'
-    ckan = RemoteCKAN(ckanurl, user_agent=ua)
+    global CUSTOM_CONFIGURATION, CKAN_USER_AGENT
+
+    ckan = RemoteCKAN(ckanurl, user_agent=CKAN_USER_AGENT)
     groups = ckan.action.group_list(id='data-explorer')
     packages = ckan.action.package_list(id='data-explorer')
 
@@ -1166,18 +1327,183 @@ def getckanpackages(ckanurl):
 
     sorted_groups = sorted(selectedgroups.keys())
     groups = {}
+
+    # Custom configuration allows overriding of groups and datasets we actually use
+
+    custom_groups, custom_buffers, custom_areas, custom_style = None, {}, None, {}
+    if CUSTOM_CONFIGURATION is not None: 
+        if 'structure' in CUSTOM_CONFIGURATION: custom_groups = CUSTOM_CONFIGURATION['structure']
+        if 'buffers' in CUSTOM_CONFIGURATION: custom_buffers = CUSTOM_CONFIGURATION['buffers']
+        if 'areas' in CUSTOM_CONFIGURATION: custom_areas = CUSTOM_CONFIGURATION['areas']
+        if 'style' in CUSTOM_CONFIGURATION: custom_style = CUSTOM_CONFIGURATION['style']
+
     for sorted_group in sorted_groups:
         ckan_group = ckan.action.group_show(id=sorted_group)
         color = ''
         if 'extras' in ckan_group:
             for extra in ckan_group['extras']:
                 if extra['key'] == 'color': color = extra['value']
+
+        # Allow CUSTOM_CONFIGURATION to override group properties/datasets
+
+        custom_datasets = None
+        if custom_groups is not None:
+            if reformatDatasetName(sorted_group) not in custom_groups: continue
+            custom_datasets = custom_groups[reformatDatasetName(sorted_group)]
+
+        if reformatDatasetName(sorted_group) in custom_style:
+            custom_group_style = custom_style[reformatDatasetName(sorted_group)]
+            if 'color' in custom_group_style: color = custom_group_style['color']
+
         groups[sorted_group] = {'title': ckan_group['title'], 'color': color, 'datasets': []}
         sorted_packages = sorted(selectedgroups[sorted_group].keys())
         for sorted_package in sorted_packages:
-            groups[sorted_group]['datasets'].append(selectedgroups[sorted_group][sorted_package])
+            dataset = selectedgroups[sorted_group][sorted_package]
+            dataset_code = reformatDatasetName(dataset['title'])
+            if custom_datasets is not None:
+                if dataset_code not in custom_datasets: continue
+                if dataset_code in custom_buffers: dataset['buffer'] = custom_buffers[dataset_code]
+            if custom_areas is not None:
+                dataset_in_customarea = False
+                for custom_area in custom_areas:
+                    if custom_area in dataset_code: dataset_in_customarea = True
+                if not dataset_in_customarea: continue
+            groups[sorted_group]['datasets'].append(dataset)
 
     return groups
+
+def processCustomConfiguration(customconfig):
+    """
+    Processes custom configuration value
+    """
+
+    global CKAN_URL, CKAN_USER_AGENT, CUSTOM_CONFIGURATION_FOLDER, CUSTOM_CONFIGURATION_PREFIX
+    global OSM_MAIN_DOWNLOAD, OSM_EXPORT_DATA, HEIGHT_TO_TIP
+
+    makeFolder(CUSTOM_CONFIGURATION_FOLDER)
+
+    config_downloaded = False
+    config_basename = basename(customconfig).lower()
+    config_saved_path = CUSTOM_CONFIGURATION_FOLDER + config_basename.replace('.yml', '') + '.yml'
+    if isfile(config_saved_path): os.remove(config_saved_path)
+
+    # If '.yml' isn't ending of customconfig, can only be a custom configuration reference on CKAN
+
+    # Open Wind Energy CKAN requires special user-agent for downloads as protection against data crawlers
+    opener = urllib.request.build_opener()
+    opener.addheaders = [('User-agent', CKAN_USER_AGENT)]
+    urllib.request.install_opener(opener)
+
+    if not config_basename.endswith('.yml'):
+
+        LogMessage("Custom configuration: Attempting to locate '" + config_basename + "' on " + CKAN_URL)
+
+        ckan = RemoteCKAN(CKAN_URL, user_agent=CKAN_USER_AGENT)
+        packages = ckan.action.package_list(id='data-explorer')
+        config_code = reformatDatasetName(config_basename)
+
+        for package in packages:
+            ckan_package = ckan.action.package_show(id=package)
+
+            # Check to see if name of customconfig matches CKAN reformatted package title 
+
+            if reformatDatasetName(ckan_package['title'].strip()) != config_code: continue
+
+            # If matches, search for YML file in resources
+
+            for resource in ckan_package['resources']:
+                if ('YML' in resource['format']):
+                    attemptDownloadUntilSuccess(resource['url'], config_saved_path)
+                    config_downloaded = True
+                    break
+
+            if config_downloaded: break
+
+    elif customconfig.startswith('http://') or customconfig.startswith('https://'): 
+        attemptDownloadUntilSuccess(customconfig, config_saved_path)
+        config_downloaded = True
+
+    # Revert user-agent to defaults
+    opener = urllib.request.build_opener()
+    urllib.request.install_opener(opener)
+
+    if not config_downloaded:
+        if isfile(customconfig): 
+            shutil.copy(customconfig, config_saved_path)
+            config_downloaded = True
+
+    if not config_downloaded: 
+        
+        LogMessage("Unable to access custom configuration '" + customconfig + "'")
+        LogMessage(" --> IGNORING CUSTOM CONFIGURATION")
+
+        return None
+
+    yaml_content = None
+    with open(config_saved_path) as stream:
+        try:
+            yaml_content = yaml.safe_load(stream)
+        except yaml.YAMLError as exc:
+            LogError(exc)
+            exit()
+
+    if yaml_content is not None:
+
+        yaml_content['configuration'] = customconfig
+
+        # Dropping all custom configuration tables
+        # If we don't do this, things gets very complicated if you start running things across many config files
+
+        LogMessage("Custom configuration: Note all generated tables for custom configuration will have '" + CUSTOM_CONFIGURATION_PREFIX + "' prefix")
+
+        LogMessage("Custom configuration: Dropping previous custom configuration database tables")
+
+        postgisDropCustomTables()
+
+        OSM_EXPORT_DATA = 'custom-' + OSM_EXPORT_DATA
+        LogMessage("Custom configuration: Setting osm-export-tool output to " + OSM_EXPORT_DATA + '.gpkg')
+
+    if 'osm' in yaml_content:
+        OSM_MAIN_DOWNLOAD = yaml_content['osm']
+        LogMessage("Custom configuration: Setting OSM download to " + yaml_content['osm'])
+
+    if 'tip-height' in yaml_content:
+        HEIGHT_TO_TIP = float(formatValue(yaml_content['tip-height']))
+        LogMessage("Custom configuration: Setting tip-height to " + str(HEIGHT_TO_TIP))
+
+    if 'clipping' in yaml_content:
+        LogMessage("Custom configuration: Clipping area(s) [" + ", ".join(yaml_content['clipping']) + "]")
+
+    if 'areas' in yaml_content:
+        LogMessage("Custom configuration: Selecting specific area(s) [" + ", ".join(yaml_content['areas']) + "]")
+
+    return yaml_content
+
+def processClippingArea(clippingarea):
+    """
+    Process custom clipping area
+    """
+
+    global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_PREFIX
+
+    countries = ['england', 'scotland', 'wales', 'northern-ireland']
+
+    if clippingarea.lower() == 'uk': return CUSTOM_CONFIGURATION # The default setup so change nothing
+    if clippingarea.lower() in countries: country = clippingarea.lower()
+    else: country = getCountryFromArea(clippingarea)
+
+    if CUSTOM_CONFIGURATION is None: CUSTOM_CONFIGURATION = {'configuration': '--clip ' + clippingarea}
+    CUSTOM_CONFIGURATION['clipping'] = clippingarea
+
+    if 'areas' not in CUSTOM_CONFIGURATION: CUSTOM_CONFIGURATION['areas'] = [country, 'uk']
+    elif country not in CUSTOM_CONFIGURATION: CUSTOM_CONFIGURATION['areas'].append(country)
+
+    LogMessage("Custom area: Clipping on '" + clippingarea + "'")
+    LogMessage("Custom area: Note all generated tables for custom configuration will have '" + CUSTOM_CONFIGURATION_PREFIX + "' prefix")
+    LogMessage("Custom area: Dropping previous custom configuration database tables")
+    postgisDropCustomTables()
+
+    return CUSTOM_CONFIGURATION
 
 def guessWFSLayerIndex(layers):
     """
@@ -1221,26 +1547,27 @@ def checkGeoJSONFiles(output_folder):
 
     return True
 
-def downloaddatasets(ckanurl, output_folder):
+def downloadDatasets(ckanurl, output_folder):
     """
     Repeats download process until all files are valid
     """
 
     while True:
 
-        downloaddatasets_singlepass(ckanurl, output_folder)
+        downloadDatasetsSinglePass(ckanurl, output_folder)
 
         if checkGeoJSONFiles(output_folder): break
 
         LogMessage("One or more downloaded files invalid, rerunning download process")
 
-def downloaddatasets_singlepass(ckanurl, output_folder):
+def downloadDatasetsSinglePass(ckanurl, output_folder):
     """
     Downloads a CKAN archive and processes the ArcGIS, WFS, GeoJSON and osm-export-tool YML files within it
     TODO: Add support for non-ArcGIS/GeoJSON/WFS/osm-export-tool-YML
     """
 
-    global REGENERATE_OUTPUT, BUILD_FOLDER, OSM_MAIN_DOWNLOAD, OSM_CONFIG_FOLDER, WORKING_CRS, OSM_EXPORT_DATA
+    global CUSTOM_CONFIGURATION, OSM_NAME_CONVERT, OVERALL_CLIPPING_FILE
+    global REGENERATE_OUTPUT, BUILD_FOLDER, OSM_DOWNLOADS_FOLDER, OSM_MAIN_DOWNLOAD, OSM_CONFIG_FOLDER, WORKING_CRS, OSM_EXPORT_DATA
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
 
     makeFolder(BUILD_FOLDER)
@@ -1251,7 +1578,7 @@ def downloaddatasets_singlepass(ckanurl, output_folder):
 
     LogMessage("Downloading data catalogue from CKAN " + ckanurl)
 
-    ckanpackages = getckanpackages(ckanurl)
+    ckanpackages = getCKANPackages(ckanurl)
 
     generateStructureLookups(ckanpackages)
     generateBufferLookup(ckanpackages)
@@ -1260,7 +1587,13 @@ def downloaddatasets_singlepass(ckanurl, output_folder):
     # Saves time to run osm-export-tool on single file with all datasets
 
     yaml_all_filename = 'all.yml'
+
+    if CUSTOM_CONFIGURATION is not None: yaml_all_filename = 'custom-all.yml'
+
     osm_layers, yaml_all_content, yaml_all_path = [], {}, OSM_CONFIG_FOLDER + yaml_all_filename
+    existing_yaml_content = None
+    rerun_osm_export_tool = False
+
     for ckanpackage in ckanpackages.keys():
         for dataset in ckanpackages[ckanpackage]['datasets']:
             if dataset['type'] != 'osm-export-tool YML': continue
@@ -1298,12 +1631,12 @@ def downloaddatasets_singlepass(ckanurl, output_folder):
 
     # Check whether latest yaml matches existing aggregated yaml (if exists)
     # If not, dump out aggregate yaml data structure and process with osm-export-tool
-    existing_yaml_content = None
-    rerun_osm_export_tool = False
+
     if isfile(yaml_all_path):
         with open(yaml_all_path, "r") as yaml_file: existing_yaml_content = yaml_file.read()
 
-    latest_yaml_content = yaml.dump(yaml_all_content)
+    # By adding comment specifying which OSM download will be used, we avoid rerunning osm-export-tool unnecessarily
+    latest_yaml_content = '# Will be run on ' + OSM_MAIN_DOWNLOAD + '\n\n' + yaml.dump(yaml_all_content)
     if latest_yaml_content != existing_yaml_content:
         rerun_osm_export_tool = True
         with open(yaml_all_path, "w") as yaml_file: yaml_file.write(latest_yaml_content)
@@ -1313,8 +1646,8 @@ def downloaddatasets_singlepass(ckanurl, output_folder):
 
     if rerun_osm_export_tool:
         # Export OSM to GPKG using osm-export-tool
-        LogMessage("Running osm-export-tool with aggregated YML: " + yaml_all_filename)
-        runSubprocess(["osm-export-tool", BUILD_FOLDER + basename(OSM_MAIN_DOWNLOAD), BUILD_FOLDER + OSM_EXPORT_DATA, "-m", yaml_all_path])
+        LogMessage("Running osm-export-tool with aggregated YML '" + yaml_all_filename + "' on: " + basename(OSM_MAIN_DOWNLOAD))
+        runSubprocess(["osm-export-tool", OSM_DOWNLOADS_FOLDER + basename(OSM_MAIN_DOWNLOAD), BUILD_FOLDER + OSM_EXPORT_DATA, "-m", yaml_all_path])
 
     osm_layers.sort()
     generateOSMLookup(osm_layers)
@@ -1587,18 +1920,20 @@ def downloaddatasets_singlepass(ckanurl, output_folder):
                                     "-t_srs", WORKING_CRS])
                 os.remove(temp_output_file)
 
-def purgeall():
+def purgeAll():
     """
     Deletes all database tables and build folder
     """
 
-    global BUILD_FOLDER, TILESERVER_FOLDER, OSM_MAIN_DOWNLOAD, OSM_EXPORT_DATA, OSM_CONFIG_FOLDER, DATASETS_DOWNLOADS_FOLDER
+    global BUILD_FOLDER, TILESERVER_FOLDER, OSM_DOWNLOADS_FOLDER, OSM_EXPORT_DATA, OSM_CONFIG_FOLDER, DATASETS_DOWNLOADS_FOLDER
 
     postgisDropAllTables()
 
     tileserver_folder_name = basename(TILESERVER_FOLDER[:-1])
     build_files = getFilesInFolder(BUILD_FOLDER)
     for build_file in build_files: os.remove(BUILD_FOLDER + build_file)
+    osm_files = getFilesInFolder(OSM_DOWNLOADS_FOLDER)
+    for osm_file in osm_files: os.remove(OSM_DOWNLOADS_FOLDER + osm_file)
     tileserver_files = getFilesInFolder(TILESERVER_FOLDER)
     for tileserver_file in tileserver_files: os.remove(TILESERVER_FOLDER + tileserver_file)
 
@@ -1647,11 +1982,12 @@ def createGridClippedFile(table_name, dataset_name, file_path):
     global OUTPUT_GRID_TABLE
 
     scratch_table_1 = '_scratch_table_1'
+    output_grid = reformatTableName(OUTPUT_GRID_TABLE)
 
     if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
 
     postgisExec("CREATE TABLE %s AS SELECT (ST_Dump(ST_Intersection(layer.geom, grid.geom))).geom geom FROM %s layer, %s grid;", \
-                (AsIs(scratch_table_1), AsIs(table_name), AsIs(OUTPUT_GRID_TABLE), ))
+                (AsIs(scratch_table_1), AsIs(table_name), AsIs(output_grid), ))
 
     inputs = runSubprocess(["ogr2ogr", \
                     file_path, \
@@ -1664,9 +2000,72 @@ def createGridClippedFile(table_name, dataset_name, file_path):
 
     if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
 
-def processdownloads(output_folder):
+def initPipeline():
     """
-    Processes folder of GeoJSON files
+    Carry out tasks essential to subsequent tasks
+    """
+
+    global OSM_BOUNDARIES
+    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, WORKING_CRS
+
+    postgisDropLegacyTables()
+
+    osm_boundaries_table = reformatTableNameIgnoreCustom(OSM_BOUNDARIES)
+    osm_boundaries_projection = getGPKGProjection(OSM_BOUNDARIES)
+
+    if not postgisCheckTableExists(osm_boundaries_table):
+
+        LogMessage("Importing into PostGIS: " + OSM_BOUNDARIES)
+
+        subprocess_list = [ "ogr2ogr", \
+                            "-f", "PostgreSQL", \
+                            'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
+                            OSM_BOUNDARIES, \
+                            "-makevalid", \
+                            "-overwrite", \
+                            "-lco", "GEOMETRY_NAME=geom", \
+                            "-lco", "OVERWRITE=YES", \
+                            "-nln", osm_boundaries_table, \
+                            "-skipfailures", \
+                            "-s_srs", osm_boundaries_projection, \
+                            "-t_srs", WORKING_CRS]
+
+        inputs = runSubprocess(subprocess_list)
+
+def getCountryFromArea(area):
+    """
+    Determine country that area is in using OSM_BOUNDARIES
+    """
+
+    global OSM_BOUNDARIES
+    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, WORKING_CRS
+    global OSM_NAME_CONVERT
+
+    osm_boundaries_table = reformatTableNameIgnoreCustom(OSM_BOUNDARIES)
+    countries = [OSM_NAME_CONVERT[country] for country in OSM_NAME_CONVERT.keys()]
+
+    results = postgisGetResults("""
+    WITH primaryarea AS
+    (
+        SELECT geom FROM %s WHERE name = %s LIMIT 1
+    )
+    SELECT 
+        name, 
+        ST_Area(ST_Intersection(primaryarea.geom, secondaryarea.geom)) geom_intersection 
+    FROM %s secondaryarea, primaryarea 
+    WHERE name = ANY (%s) AND ST_Intersects(primaryarea.geom, secondaryarea.geom) ORDER BY geom_intersection DESC LIMIT 1;
+    """, (AsIs(osm_boundaries_table) , area, AsIs(osm_boundaries_table), countries, ))
+
+    containing_country = results[0][0]
+
+    for canonical_country in OSM_NAME_CONVERT.keys():
+        if OSM_NAME_CONVERT[canonical_country] == containing_country: return canonical_country
+
+    return None
+
+def runProcessingOnDownloads(output_folder):
+    """
+    Processes folder of GeoJSON and GPKG files
     - Adds buffers where appropriate
     - Joins and dissolves child datasets into single parent dataset
     - Joins and dissolves datasets into CKAN groups, one for each group
@@ -1674,7 +2073,8 @@ def processdownloads(output_folder):
     - Converts final files to GeoJSON (EPSG:4326)
     """
 
-    global DEBUG_RUN, HEIGHT_TO_TIP, WORKING_CRS, BUILD_FOLDER, OSM_MAIN_DOWNLOAD, OSM_EXPORT_DATA
+    global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_OUT_PREFIX
+    global DEBUG_RUN, HEIGHT_TO_TIP, WORKING_CRS, BUILD_FOLDER, OSM_MAIN_DOWNLOAD, OSM_EXPORT_DATA, OSM_BOUNDARIES
     global FINALLAYERS_OUTPUT_FOLDER, FINALLAYERS_CONSOLIDATED, OVERALL_CLIPPING_FILE, REGENERATE_INPUT, REGENERATE_OUTPUT
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
     global OUTPUT_GRID_SPACING, OUTPUT_GRID_TABLE
@@ -1685,32 +2085,122 @@ def processdownloads(output_folder):
     scratch_table_1 = '_scratch_table_1'
     scratch_table_2 = '_scratch_table_2'
 
+    # Prefix all output files with custom_configuration_prefix is CUSTOM_CONFIGURATION set
+
+    custom_configuration_prefix = ''
+    if CUSTOM_CONFIGURATION is not None: custom_configuration_prefix = CUSTOM_CONFIGURATION_OUT_PREFIX
+
     # Ensure all necessary folders exists
 
     makeFolder(BUILD_FOLDER)
     makeFolder(output_folder)
     makeFolder(FINALLAYERS_OUTPUT_FOLDER)
 
-    # Import UK clipping into PostGIS
+    # Import OSM-specific data files
+
+    LogMessage("Processing all OSM-specific data layers...")
+
+    osm_layers = getOSMLookup()
+    osm_export_file = BUILD_FOLDER + OSM_EXPORT_DATA + '.gpkg'
+    osm_export_projection = getGPKGProjection(osm_export_file)
+
+    for osm_layer in osm_layers:
+
+        # reformatTableName will add CUSTOM_CONFIGURATION_PREFIX to table name if using custom configuration file
+        table_name = reformatTableName(osm_layer)
+        table_exists = postgisCheckTableExists(table_name)
+
+        if (not REGENERATE_INPUT) and table_exists: continue
+
+        LogMessage("Importing " + OSM_EXPORT_DATA + ".gpkg OSM layer into PostGIS: " + osm_layer)
+
+        # Assume 'osm-export-tool' outputs in EPSG:4326 projection
+        import_array = ["ogr2ogr", \
+                        "-f", "PostgreSQL", \
+                        'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
+                        osm_export_file, \
+                        "-overwrite", \
+                        "-nln", table_name, \
+                        "-lco", "GEOMETRY_NAME=geom", \
+                        "-lco", "OVERWRITE=YES", \
+                        "-dialect", "sqlite", \
+                        "-sql", \
+                        "SELECT * FROM '" + osm_layer + "'", \
+                        "-s_srs", osm_export_projection, \
+                        "-t_srs", WORKING_CRS]
+
+        # If importing custom clipping area, clip it to OVERALL_CLIPPING_FILE
+        if 'overall_clipping' in table_name: 
+            import_array.append('-clipsrc')
+            import_array.append(OVERALL_CLIPPING_FILE)
+
+        runSubprocess(import_array)
+
+    LogMessage("Finished processing all OSM-specific data layers")
+
+    # Import overall clipping into PostGIS
+
+    # If custom configuration has 'clipping' defined, use this instead of default overall clipping
+
+    clipping = None
+    if CUSTOM_CONFIGURATION is not None:
+        if 'clipping' in CUSTOM_CONFIGURATION:
+            clipping = CUSTOM_CONFIGURATION['clipping']
+
+            # Convert area names into OSM names
+            for clipping_index in range(len(clipping)):
+                clipping_current = clipping[clipping_index].lower()
+                if clipping_current in OSM_NAME_CONVERT: clipping[clipping_index] = OSM_NAME_CONVERT[clipping_current]
+                clipping[clipping_index] = "'" + clipping[clipping_index] + "'"
+
+    # reformatTableName will add CUSTOM_CONFIGURATION_PREFIX to table name if using custom configuration file
+    # so if using custom config, new copy of clipping_table will be created at CUSTOM_CONFIGURATION_PREFIX + 'overall_clipping'
 
     clipping_table = reformatTableName(OVERALL_CLIPPING_FILE)
 
     if not postgisCheckTableExists(clipping_table):
 
-        LogMessage("Importing into PostGIS: " + OVERALL_CLIPPING_FILE)
+        # If CUSTOM_CONFIGURATION requires specific area, modify how we create overall clipping area
 
-        clipping_file_projection = getGPKGProjection(OVERALL_CLIPPING_FILE)
+        if clipping is None:
 
-        runSubprocess([ "ogr2ogr", \
-                        "-f", "PostgreSQL", \
-                        'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
-                        OVERALL_CLIPPING_FILE, \
-                        "-overwrite", \
-                        "-nln", clipping_table, \
-                        "-lco", "GEOMETRY_NAME=geom", \
-                        "-lco", "OVERWRITE=YES", \
-                        "-s_srs", clipping_file_projection, \
-                        "-t_srs", WORKING_CRS]) 
+            LogMessage("Importing into PostGIS: " + OVERALL_CLIPPING_FILE)
+
+            clipping_file_projection = getGPKGProjection(OVERALL_CLIPPING_FILE)
+
+            runSubprocess([ "ogr2ogr", \
+                            "-f", "PostgreSQL", \
+                            'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
+                            OVERALL_CLIPPING_FILE, \
+                            "-overwrite", \
+                            "-nln", clipping_table, \
+                            "-lco", "GEOMETRY_NAME=geom", \
+                            "-lco", "OVERWRITE=YES", \
+                            "-s_srs", clipping_file_projection, \
+                            "-t_srs", WORKING_CRS]) 
+            
+        else:
+
+            LogMessage("Importing into PostGIS: Custom clipping boundaries " + ",".join(clipping) + " from " + OSM_BOUNDARIES)
+
+            osm_boundaries_projection = getGPKGProjection(OSM_BOUNDARIES)
+
+            runSubprocess([ "ogr2ogr", \
+                            "-f", "PostgreSQL", \
+                            'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
+                            OSM_BOUNDARIES, \
+                            "-overwrite", \
+                            "-nln", clipping_table, \
+                            "-lco", "GEOMETRY_NAME=geom", \
+                            "-lco", "OVERWRITE=YES", \
+                            "-dialect", "sqlite", \
+                            "-sql", \
+                            "SELECT * FROM '" + OSM_BOUNDARIES.replace('.gpkg', '') + "' WHERE name IN (" + ",".join(clipping) + ")", \
+                            "-s_srs", osm_boundaries_projection, \
+                            "-t_srs", WORKING_CRS, \
+                            "-clipsrc", OVERALL_CLIPPING_FILE])
+
+    LogMessage("Checking/creating union of clipping layer - may be default clipping layer or custom clipping layer...")
 
     clipping_union_table = buildUnionTableName(clipping_table)
 
@@ -1722,62 +2212,45 @@ def processdownloads(output_folder):
                     (AsIs(clipping_union_table), AsIs(clipping_table), ))
         postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(clipping_union_table + "_idx"), AsIs(clipping_union_table), ))
 
+    LogMessage("Finished checking/creating union of clipping layer")
+
     # Create output grid
 
-    if not postgisCheckTableExists(OUTPUT_GRID_TABLE):
+    output_grid = reformatTableName(OUTPUT_GRID_TABLE)
+
+    if not postgisCheckTableExists(output_grid):
 
         LogMessage("Creating grid overlay to improve mbtiles rendering performance and quality")
 
         postgisExec("CREATE TABLE %s AS SELECT ST_Transform((ST_SquareGrid(%s, ST_Transform(geom, 3857))).geom, 4326) geom FROM %s;", 
-                    (AsIs(OUTPUT_GRID_TABLE), AsIs(OUTPUT_GRID_SPACING), AsIs(clipping_union_table), ))
-
-    # Import OSM-specific data files
-
-    LogMessage("Processing all OSM-specific data layers...")
-
-    osm_layers = getOSMLookup()
-    osm_export_file = BUILD_FOLDER + OSM_EXPORT_DATA + '.gpkg'
-    osm_export_projection = getGPKGProjection(osm_export_file)
-    for osm_layer in osm_layers:
-        table_name = reformatTableName(osm_layer)
-        table_exists = postgisCheckTableExists(table_name)
-        if (not REGENERATE_INPUT) and table_exists: continue
-        LogMessage("Importing " + OSM_EXPORT_DATA + ".gpkg OSM layer into PostGIS: " + osm_layer)
-        # Assume 'osm-export-tool' outputs in EPSG:4326 projection
-        osm_layer_table = osm_layer
-        if DEBUG_RUN: osm_layer_table = 'danger-areas--uk'
-        inputs = runSubprocess(["ogr2ogr", \
-                                "-f", "PostgreSQL", \
-                                'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
-                                osm_export_file, \
-                                "-overwrite", \
-                                "-nln", osm_layer, \
-                                "-lco", "GEOMETRY_NAME=geom", \
-                                "-lco", "OVERWRITE=YES", \
-                                "-dialect", "sqlite", \
-                                "-sql", \
-                                "SELECT * FROM '" + osm_layer_table + "'", \
-                                "-s_srs", osm_export_projection, \
-                                "-t_srs", WORKING_CRS])
-        # postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(table_name + "_idx"), AsIs(table_name), ))
-
-    LogMessage("Finished processing all OSM-specific data layers")
+                    (AsIs(output_grid), AsIs(OUTPUT_GRID_SPACING), AsIs(clipping_union_table), ))
 
     # Import all GeoJSON into PostGIS
 
     LogMessage("Importing downloaded files into PostGIS...")
 
+    current_datasets = getStructureDatasets()
     downloaded_files = getFilesInFolder(output_folder)
+
     for downloaded_file in downloaded_files:
+
         core_dataset_name = getCoreDatasetName(downloaded_file)
-        tableexists = postgisCheckTableExists(core_dataset_name)
+
+        # reformatTableName will add CUSTOM_CONFIGURATION_PREFIX to table name if using custom configuration file
+
+        imported_table = reformatTableName(core_dataset_name)
+        tableexists = postgisCheckTableExists(imported_table)
+
         if (not REGENERATE_INPUT) and tableexists: continue
 
-        if downloaded_file == 'test.geojson': continue
+        # If CUSTOM_CONFIGURATION set, only import specific files in custom configuration
+        # But typically we import everything in downloads folder
+
+        if CUSTOM_CONFIGURATION is not None:
+            if core_dataset_name not in current_datasets: continue
 
         LogMessage("Importing into PostGIS: " + downloaded_file)
 
-        if DEBUG_RUN: downloaded_file = 'test.geojson'
         downloaded_file_fullpath = output_folder + downloaded_file
 
         sql_where_clause = None
@@ -1822,7 +2295,7 @@ def processdownloads(output_folder):
                             "-overwrite", \
                             "-lco", "GEOMETRY_NAME=geom", \
                             "-lco", "OVERWRITE=YES", \
-                            "-nln", core_dataset_name, \
+                            "-nln", imported_table, \
                             "-skipfailures", \
                             "-s_srs", orig_srs, \
                             "-t_srs", WORKING_CRS]
@@ -1832,7 +2305,6 @@ def processdownloads(output_folder):
                 subprocess_list.append(extraitem)
 
         inputs = runSubprocess(subprocess_list)
-        # postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(core_dataset_name + "_idx"), AsIs(core_dataset_name), ))
 
     LogMessage("All downloaded files imported into PostGIS")
 
@@ -1964,8 +2436,8 @@ def processdownloads(output_folder):
     LogMessage("Amalgamating and dissolving all groups as single overall layer...")
 
     alllayers_table = buildFinalLayerTableName(FINALLAYERS_CONSOLIDATED)
-    final_file_geojson = FINALLAYERS_OUTPUT_FOLDER + reformatDatasetName(alllayers_table) + '.geojson'
-    final_file_gpkg = FINALLAYERS_OUTPUT_FOLDER + reformatDatasetName(alllayers_table) + '.gpkg'
+    final_file_geojson = FINALLAYERS_OUTPUT_FOLDER + custom_configuration_prefix + reformatDatasetName(alllayers_table) + '.geojson'
+    final_file_gpkg = FINALLAYERS_OUTPUT_FOLDER + custom_configuration_prefix + reformatDatasetName(alllayers_table) + '.gpkg'
     finallayers.append(reformatDatasetName(alllayers_table))
     alllayers_table_exists = postgisCheckTableExists(alllayers_table)
     if REGENERATE_OUTPUT or (not alllayers_table_exists):
@@ -1978,21 +2450,26 @@ def processdownloads(output_folder):
 
     # Exporting final layers to GeoJSON and GPKG
 
-    LogMessage("Converting final layers to GPKG and GeoJSON...")
+    LogMessage("Converting final layers to GPKG, SHP and GeoJSON...")
 
     shp_extensions = ['shp', 'dbf', 'shx', 'prj']
+
+    is_custom_configuration = (CUSTOM_CONFIGURATION is not None)
+
     for finallayer in finallayers:
         finallayer_table = reformatTableName(finallayer)
         core_dataset_name = getFinalLayerCoreDatasetName(finallayer_table)
         latest_name = getFinalLayerLatestName(finallayer_table)
-        finallayer_file_gpkg = FINALLAYERS_OUTPUT_FOLDER + finallayer + '.gpkg' 
-        finallayer_file_shp = FINALLAYERS_OUTPUT_FOLDER + finallayer + '.shp' 
-        finallayer_file_geojson = FINALLAYERS_OUTPUT_FOLDER + finallayer + '.geojson' 
+        finallayer_file_gpkg = FINALLAYERS_OUTPUT_FOLDER + custom_configuration_prefix + finallayer + '.gpkg' 
+        finallayer_file_shp = FINALLAYERS_OUTPUT_FOLDER + custom_configuration_prefix + finallayer + '.shp' 
+        finallayer_file_geojson = FINALLAYERS_OUTPUT_FOLDER + custom_configuration_prefix + finallayer + '.geojson' 
+
+        # We don't need custom prefix for latest file as it's always just latest
         finallayer_latest_file_gpkg = FINALLAYERS_OUTPUT_FOLDER + latest_name + '.gpkg' 
         finallayer_latest_file_shp = FINALLAYERS_OUTPUT_FOLDER + latest_name + '.shp' 
         finallayer_latest_file_geojson = FINALLAYERS_OUTPUT_FOLDER + latest_name + '.geojson' 
 
-        if REGENERATE_OUTPUT or (not isfile(finallayer_file_gpkg)):
+        if is_custom_configuration or REGENERATE_OUTPUT or (not isfile(finallayer_file_gpkg)):
             LogMessage("Exporting final layer to: " + finallayer_file_gpkg)
             if isfile(finallayer_file_gpkg): os.remove(finallayer_file_gpkg)
             inputs = runSubprocess(["ogr2ogr", \
@@ -2008,11 +2485,11 @@ def processdownloads(output_folder):
                             "-s_srs", WORKING_CRS, \
                             "-t_srs", 'EPSG:4326'])
             checkGPKGIsValid(finallayer_file_gpkg, core_dataset_name, inputs)
-        # Always copy to latest
-        if not isfile(finallayer_latest_file_gpkg): 
+
+            # Copy to latest
             shutil.copy(finallayer_file_gpkg, finallayer_latest_file_gpkg)
 
-        if REGENERATE_OUTPUT or (not isfile(finallayer_file_shp)):
+        if is_custom_configuration or REGENERATE_OUTPUT or (not isfile(finallayer_file_shp)):
             LogMessage("Exporting final layer to: " + finallayer_file_shp)
             for shp_extension in shp_extensions:
                 if isfile(finallayer_file_shp.replace('shp', shp_extension)): os.remove(finallayer_file_shp.replace('shp', shp_extension))
@@ -2030,7 +2507,7 @@ def processdownloads(output_folder):
             for shp_extension in shp_extensions:
                 shutil.copy(finallayer_file_shp.replace('shp', shp_extension), finallayer_latest_file_shp.replace('shp', shp_extension))
 
-        if REGENERATE_OUTPUT or (not isfile(finallayer_file_geojson)):
+        if is_custom_configuration or REGENERATE_OUTPUT or (not isfile(finallayer_file_geojson)):
             LogMessage("Exporting final layer to: " + finallayer_file_geojson)
             if isfile(finallayer_file_geojson): os.remove(finallayer_file_geojson)
             inputs = runSubprocess(["ogr2ogr", \
@@ -2044,11 +2521,11 @@ def processdownloads(output_folder):
             # As we're outputting new geojson, delete corresponding mbtiles file if exists 
             finallayer_latest_mbtiles = TILESERVER_DATA_FOLDER + basename(finallayer_latest_file_geojson).replace('.geojson', '.mbtiles')
             if isfile(finallayer_latest_mbtiles): os.remove(finallayer_latest_mbtiles)
-        # Always copy to latest
-        if not isfile(finallayer_latest_file_geojson): 
+    
+            # Copy to latest
             shutil.copy(finallayer_file_geojson, finallayer_latest_file_geojson)
 
-    LogMessage("All final layers converted to GPKG and GeoJSON")
+    LogMessage("All final layers converted to GPKG, SHP and GeoJSON")
 
     # Build tile server files
 
@@ -2076,7 +2553,7 @@ def processdownloads(output_folder):
     if isfile(final_file_geojson) and isfile(final_file_gpkg):
         print("""
 \033[1;34m***********************************************************************
-******************* OPEN WIND BUILD PROCESS COMPLETE ******************
+**************** OPEN WIND ENERGY BUILD PROCESS COMPLETE **************
 ***********************************************************************\033[0m
 
 Final composite layers for turbine height to tip """ + formatValue(HEIGHT_TO_TIP) + """m created at:
@@ -2156,7 +2633,7 @@ def buildTileserverFiles():
     """
 
     global  OVERALL_CLIPPING_FILE, TILESERVER_URL, TILESERVER_FONTS_GITHUB, TILESERVER_SRC_FOLDER, TILESERVER_FOLDER, TILESERVER_DATA_FOLDER, TILESERVER_STYLES_FOLDER, \
-            OSM_MAIN_DOWNLOAD, BUILD_FOLDER, FINALLAYERS_OUTPUT_FOLDER, FINALLAYERS_CONSOLIDATED, MAPAPP_FOLDER
+            OSM_DOWNLOADS_FOLDER, OSM_MAIN_DOWNLOAD, BUILD_FOLDER, FINALLAYERS_OUTPUT_FOLDER, FINALLAYERS_CONSOLIDATED, MAPAPP_FOLDER
     global  TILEMAKER_COASTLINE_CONFIG, TILEMAKER_COASTLINE_PROCESS, TILEMAKER_OMT_CONFIG, TILEMAKER_OMT_PROCESS, SKIP_FONTS_INSTALLATION, OPENMAPTILES_HOSTED_FONTS
 
     # Run tileserver build process
@@ -2166,6 +2643,18 @@ def buildTileserverFiles():
     makeFolder(TILESERVER_FOLDER)
     makeFolder(TILESERVER_DATA_FOLDER)
     makeFolder(TILESERVER_STYLES_FOLDER)
+
+    # Legacy issue: housekeeping of final output and tileserver folders due to shortening of 
+    # specific dataset names leaving old files with old names that cause problems
+
+    legacy_delete_items = ['public-roads-a-and-b-roads-and-motorways', 'openwind.json']
+    for legacy_delete_item in legacy_delete_items:
+        for file_name in getFilesInFolder(FINALLAYERS_OUTPUT_FOLDER):
+            if legacy_delete_item in file_name: os.remove(FINALLAYERS_OUTPUT_FOLDER + file_name)
+        for file_name in getFilesInFolder(TILESERVER_DATA_FOLDER):
+            if legacy_delete_item in file_name: os.remove(TILESERVER_DATA_FOLDER + file_name)
+        for file_name in getFilesInFolder(TILESERVER_STYLES_FOLDER):
+            if legacy_delete_item in file_name: os.remove(TILESERVER_STYLES_FOLDER + file_name)
 
     # Copy 'sprites' folder
 
@@ -2199,10 +2688,10 @@ def buildTileserverFiles():
     with open(openmaptiles_style_file_dst, "w") as json_file: json.dump(openmaptiles_style_json, json_file, indent=4)
 
     attribution = "Source data copyright of multiple organisations. For all data sources, see <a href=\"" + CKAN_URL + "\" target=\"_blank\">" + CKAN_URL.replace('https://', '') + "</a>"
-    openwind_style_file = TILESERVER_STYLES_FOLDER + 'openwind.json'
+    openwind_style_file = TILESERVER_STYLES_FOLDER + 'openwindenergy.json'
     openwind_style_json = openmaptiles_style_json
-    openwind_style_json['name'] = 'Open Wind'
-    openwind_style_json['id'] = 'openwind'
+    openwind_style_json['name'] = 'Open Wind Energy'
+    openwind_style_json['id'] = 'openwindenergy'
     openwind_style_json['sources']['attribution']['attribution'] += " " + attribution
 
     basemap_mbtiles = TILESERVER_DATA_FOLDER + basename(OSM_MAIN_DOWNLOAD).replace(".osm.pbf", ".mbtiles")
@@ -2221,7 +2710,7 @@ def buildTileserverFiles():
         bbox_unitedkingdom_padded = "-49.262695,38.548165,39.990234,64.848937"
 
         inputs = runSubprocess(["tilemaker", \
-                                "--input", BUILD_FOLDER + basename(OSM_MAIN_DOWNLOAD), \
+                                "--input", OSM_DOWNLOADS_FOLDER + basename(OSM_MAIN_DOWNLOAD), \
                                 "--output", basemap_mbtiles, \
                                 "--bbox", bbox_unitedkingdom_padded, \
                                 "--process", TILEMAKER_COASTLINE_PROCESS, \
@@ -2230,7 +2719,7 @@ def buildTileserverFiles():
         LogMessage("Merging " + basename(OSM_MAIN_DOWNLOAD) + " into global coastline mbtiles...")
 
         inputs = runSubprocess(["tilemaker", \
-                                "--input", BUILD_FOLDER + basename(OSM_MAIN_DOWNLOAD), \
+                                "--input", OSM_DOWNLOADS_FOLDER + basename(OSM_MAIN_DOWNLOAD), \
                                 "--output", basemap_mbtiles, \
                                 "--merge", \
                                 "--process", TILEMAKER_OMT_PROCESS, \
@@ -2259,8 +2748,8 @@ def buildTileserverFiles():
 
     output_files = getFilesInFolder(FINALLAYERS_OUTPUT_FOLDER)
     styles, data = {}, {}
-    styles["openwind"] = {
-      "style": "openwind.json",
+    styles["openwindenergy"] = {
+      "style": "openwindenergy.json",
       "tilejson": {
         "type": "overlay",
         "bounds": clipping_bounds
@@ -2318,6 +2807,15 @@ def buildTileserverFiles():
 
             createGridClippedFile(original_table_name, core_dataset_name, tippecanoe_grid_clipped_file)
 
+            # Check for no features as GeoJSON with no features causes problem for tippecanoe
+            # If no features, add dummy point just so Tippecanoe creates mbtiles
+
+            if os.path.getsize(tippecanoe_grid_clipped_file) < 1000:
+                with open(tippecanoe_grid_clipped_file, "r") as json_file: geojson_content = json.load(json_file)
+                if ('features' not in geojson_content) or (len(geojson_content['features']) == 0): 
+                    geojson_content['features'] = [{"type":"Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [0,0]}}]
+                    with open(tippecanoe_grid_clipped_file, "w") as json_file: json.dump(geojson_content, json_file)
+
             inputs = runSubprocess(["tippecanoe", \
                                     "-Z4", "-z15", \
                                     "-X", \
@@ -2328,7 +2826,7 @@ def buildTileserverFiles():
                                     tippecanoe_grid_clipped_file, \
                                     "-o", tippecanoe_output ])
 
-            # if isfile(tippecanoe_grid_clipped_file): os.remove(tippecanoe_grid_clipped_file)
+            if isfile(tippecanoe_grid_clipped_file): os.remove(tippecanoe_grid_clipped_file)
 
         if not isfile(tippecanoe_output):
             LogError("Failed to create mbtiles: " + basename(tippecanoe_output))
@@ -2438,9 +2936,23 @@ def buildQGISFile():
 
         runSubprocessAndOutput([QGIS_PYTHON_PATH, 'build-qgis.py', QGIS_OUTPUT_FILE])
 
-LogMessage("Starting openwind data pipeline...")
+
+# ***********************************************************
+# ***********************************************************
+# ********************* MAIN APPLICATION ********************
+# ***********************************************************
+# ***********************************************************
+
+print("""\033[1;34m
+***********************************************************************
+******************** OPEN WIND ENERGY DATA PIPELINE *******************
+***********************************************************************
+\033[0m""")
+
+LogMessage("Starting Open Wind Energy data pipeline...")
 
 postgisWaitRunning()
+initPipeline()
 
 if len(sys.argv) > 1:
     arg_index = 0
@@ -2450,11 +2962,24 @@ if len(sys.argv) > 1:
             HEIGHT_TO_TIP = float(arg)
             LogMessage("************ Using HEIGHT_TO_TIP: " + formatValue(HEIGHT_TO_TIP) + ' metres ************')
 
+        if arg == '--custom':
+            if len(sys.argv) > arg_index:
+                customconfig = sys.argv[arg_index + 1]
+                LogMessage("--custom argument passed: Using custom configuration '" + customconfig + "'")
+                CUSTOM_CONFIGURATION = processCustomConfiguration(customconfig)
+
+        if arg == '--clip':
+            if len(sys.argv) > arg_index:
+                # *** This will override any 'clipping' setting in '--custom', above
+                clippingarea = sys.argv[arg_index + 1]
+                LogMessage("--clip argument passed: Using custom clipping area '" + clippingarea + "'")
+                CUSTOM_CONFIGURATION = processClippingArea(clippingarea)
+
         if arg == '--purgeall':
             LogMessage("--purgeall argument passed: Clearing database and all build files")
             REGENERATE_INPUT = True
             REGENERATE_OUTPUT = True
-            purgeall()
+            purgeAll()
 
         if arg == '--purgedb':
             LogMessage("--purgedb argument passed: Clearing database")
@@ -2488,7 +3013,7 @@ if len(sys.argv) > 1:
         if arg == '--regenerate':
             if len(sys.argv) > arg_index:
                 regeneratedataset = sys.argv[arg_index + 1]
-                LogMessage("-regenerate argument passed: Redownloading and rebuilding all tables related to " + regeneratedataset)
+                LogMessage("--regenerate argument passed: Redownloading and rebuilding all tables related to " + regeneratedataset)
                 deleteDataset(regeneratedataset)
 
         if arg == '--help':
@@ -2501,14 +3026,16 @@ Where 'HEIGHT TO TIP' is height to tip in metres of target wind turbine.
                   
 Possible additional arguments:
 
---purgeall             Clear all downloads and database tables as if starting fresh
---purgedb              Clear all PostGIS tables and reexport final layer files
---purgederived         Clear all derived (ie. non-core data) PostGIS tables and reexport final layer files
---purgeamalgamated     Clear all amalgamated PostGIS tables and reexport final layer files
---skipdownload         Skip download stage and just do PostGIS processing
---skipfonts            Skip font installation stage and use hosted version of openmaptiles fonts
---regenerate dataset   Regenerate specific dataset by redownloading and recreating all tables relating to dataset
---buildtileserver      Rebuild files for tileserver
+--custom               Supply custom YML configuration file. Can be local file path, internet url or name on CKAN open data portal.
+--clip                 Supply custom area for clipping. Uses OSM name from osm-boundaries.gpkg. Overrides any 'clipping' setting in custom YML.
+--purgeall             Clear all downloads and database tables as if starting fresh.
+--purgedb              Clear all PostGIS tables and reexport final layer files.
+--purgederived         Clear all derived (ie. non-core data) PostGIS tables and reexport final layer files.
+--purgeamalgamated     Clear all amalgamated PostGIS tables and reexport final layer files.
+--skipdownload         Skip download stage and just do PostGIS processing.
+--skipfonts            Skip font installation stage and use hosted version of openmaptiles fonts.
+--regenerate dataset   Regenerate specific dataset by redownloading and recreating all tables relating to dataset.
+--buildtileserver      Rebuild files for tileserver.
 
 """)
             exit()
@@ -2516,6 +3043,6 @@ Possible additional arguments:
         arg_index += 1
 
 if PERFORM_DOWNLOAD:
-    downloaddatasets(CKAN_URL, DATASETS_DOWNLOADS_FOLDER)
+    downloadDatasets(CKAN_URL, DATASETS_DOWNLOADS_FOLDER)
 
-processdownloads(DATASETS_DOWNLOADS_FOLDER)
+runProcessingOnDownloads(DATASETS_DOWNLOADS_FOLDER)

@@ -39,6 +39,12 @@ sitepredictor/finaldata_postbugfix.csv
 sitepredictor/h2o_model/
 sitepredictor/household_power_consumption.txt
 sitepredictor/testdata_works.csv
+sitepredictor/Ellipsis Drive.webloc
+sitepredictor/finaldata_temp_works.csv
+sitepredictor/output-turbines.csv
+sitepredictor/projects_oppositiongroups_boolean.json
+sitepredictor/projects_sentiment_scores_pass2.json
+sitepredictor/projects_sentiment_scores_pass3.json
 test.kml
 testtippecanoe.py
 openmaptiles-fonts/

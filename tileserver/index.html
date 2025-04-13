@@ -110,11 +110,11 @@ body { margin: 0; padding: 0; }
 
     const map = new maplibregl.Map({
         container: 'map',
-        style: 'http://localhost:8080/styles/openwind/style.json',
+        style: 'http://localhost:8080/styles/openwindenergy/style.json',
         zoom: 5.2,
         maxPitch: 85,
         minZoom: 5,
-        maxBounds: [[-49.262695,38.548165], [39.990234,64.848937]],        
+        maxBounds: [[-49.262695,38.548165], [39.990234,64.848937]],
         center: [-6, 55.273]
     });
 
@@ -130,7 +130,9 @@ body { margin: 0; padding: 0; }
     map.on('load', () => {
 
         const info = document.getElementById('info');
-        info.innerHTML = 'Wind constraints for turbine height to tip: <b>' + openwind_structure.tipheight + 'm</b>';
+        title_text = 'Wind constraints for turbine height to tip: <b>' + openwind_structure.tipheight + 'm</b>';
+        if (openwind_structure.configuration != '') title_text += ' using configuration <b>' + openwind_structure.configuration + '</b>';
+        info.innerHTML = title_text;
 
         // Iterate through openwind datasets to produce list of menu items
         const datasets = openwind_structure.datasets;

@@ -100,18 +100,19 @@ sudo apt-get update
 sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
 wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
 sudo apt-get update -y
-sudo apt-get -y install postgresql-13-postgis
+sudo apt install postgresql-13-postgis -y
 ```
 
 ### Next steps:
 
-- Move to section [3b. Ubuntu - Local (non-Docker) install](#3b-ubuntu---local-non-docker-install) 
+- Go to section [3b. Ubuntu - Local (non-Docker) install](#3b-ubuntu---local-non-docker-install) 
 
 ## 1c. Mac - All installs
 
 Install [QEMU](https://www.qemu.org/download/):
 
 ```
+brew update
 brew install qemu
 ```
 
@@ -122,9 +123,9 @@ brew install docker
 
 ### Next steps:
 
-- If you want to create a **Docker-based install**, go to section [2. All Platforms - Docker-based install -> Build -> View](#2-all-platforms---docker-based-install---build---view).
+- To create a **Docker-based install**, go to section [2. All Platforms - Docker-based install -> Build -> View](#2-all-platforms---docker-based-install---build---view).
 
-- If you want to create a **Local (non-Docker) install**, go to section [3b. Mac - Local (non-Docker) install](#3b-mac---local-non-docker-install).
+- To create a **Local (non-Docker) install**, go to section [3a. Mac - Local (non-Docker) install](#3a-mac---local-non-docker-install).
 
 
 ## 1d. Ubuntu - All installs
@@ -133,7 +134,7 @@ Install [QEMU](https://www.qemu.org/download/):
 
 ```
 sudo apt-get update
-sudo apt install qemu-user-static binfmt-support
+sudo apt install qemu-user-static binfmt-support -y
 ```
 
 Install Docker using [these official instructions](https://docs.docker.com/engine/install/ubuntu/) or with:
@@ -153,9 +154,9 @@ sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin dock
 
 ### Next steps:
 
-- If you want to create a **Docker-based install**, go to section [2. All platforms - Docker-based install -> Build -> View](#2-all-platforms---docker-based-install---build---view).
+- To create a **Docker-based install**, go to section [2. All platforms - Docker-based install -> Build -> View](#2-all-platforms---docker-based-install---build---view).
 
-- If you want to create a **Local (non-Docker) install**, go to section [3b. Ubuntu - Local (non-Docker) install](#3b-ubuntu---local-non-docker-install).
+- To create a **Local (non-Docker) install**, go to section [3b. Ubuntu - Local (non-Docker) install](#3b-ubuntu---local-non-docker-install).
 
 ## 2. All platforms - Docker-based install -> Build -> View
 
@@ -202,10 +203,10 @@ Or alternatively open the QGIS file located at `build-docker/windconstraints--la
 
 ## 3a. Mac - Local (non-Docker) install
 
-Install `PostGIS`, `Python3.9`, `GDAL`, `tippecanoe`, general software and libraries required to compile `tilemaker`:
+Install `PostGIS`, `Python3.9`, `GDAL`, `tippecanoe`, `QGIS`, general software and libraries required to compile `tilemaker`:
 
 ```
-brew install postgis python@3.9 gdal tippecanoe cmake make geos rapidjson gqis \
+brew install postgis python@3.9 gdal tippecanoe cmake make geos rapidjson gqis git \
 libpq libtiff libspatialite lua shapelib sqlite curl proj node npm virtualenv
 ```
 Install `tilemaker` with:
@@ -224,7 +225,7 @@ tilemaker --help
 
 ### Next steps:
 
-- Move to section [4. All Platforms - Local (non-Docker) install](#4-all-platforms---local-non-docker-install).
+- Go to section [4. All Platforms - Local (non-Docker) install](#4-all-platforms---local-non-docker-install).
 
 
 ## 3b. Ubuntu - Local (non-Docker) install
@@ -233,7 +234,7 @@ Install `Python3.9`, `GDAL`, `QGIS`, general software and libraries required to 
 
 ```
 sudo add-apt-repository ppa:deadsnakes/ppa
-sudo apt update
+sudo apt-get update
 sudo apt install  gnupg software-properties-common cmake make g++ dpkg ca-certificates \
                   libbz2-dev libpq-dev libboost-all-dev libgeos-dev libtiff-dev libspatialite-dev \
                   liblua5.4-dev rapidjson-dev libshp-dev libgdal-dev shapelib \
@@ -246,7 +247,7 @@ sudo apt install  gnupg software-properties-common cmake make g++ dpkg ca-certif
 If you're **not** running Ubuntu on Windows using `WSL`, also install `PostGIS`:
 
 ```
-sudo apt update
+sudo apt-get update
 sudo apt install postgresql-postgis -y
 ```
 
@@ -284,7 +285,7 @@ tilemaker --help
 
 ### Next steps:
 
-- Move to section [4. All platforms - Local (non-Docker) install](#4-all-platforms---local-non-docker-install).
+- Go to section [4. All platforms - Local (non-Docker) install](#4-all-platforms---local-non-docker-install).
 
 # 4. All platforms - Local (non-Docker) install
 
@@ -328,6 +329,16 @@ Install correct version of `GDAL` Python module so it exactly matches installed 
 pip3 install gdal==`gdal-config --version`
 ```
 
+If you experience `AttributeError: install_layout` at this stage, enter:
+```
+pip install -U setuptools
+```
+...and rerun:
+
+```
+pip3 install gdal==`gdal-config --version`
+```
+
 ### Install Python modules required for Open Wind Energy
 ```
 pip3 install -r requirements.txt
@@ -362,7 +373,7 @@ To ensure you have the correct `QGIS_PYTHON_PATH` value, enter it into a command
 ```
 /usr/bin/python3
 
-or
+[or]
 
 /Applications/QGIS.app/Contents/MacOS/bin/python3
 ```
@@ -498,7 +509,7 @@ Note: you may experience problems building openmaptiles fonts. If so, you can sk
 
 This will instruct the build process to skip attempting an install of openmaptiles fonts and will use a CDN (pre-built) version of fonts instead.
 
-After attempting to install openmaptiles fonts, ensure you are in the main Open Wind Energy directory:
+After attempting to install openmaptiles fonts, ensure you are in the main `openwindenergy/` directory:
 
 ```
 cd ..

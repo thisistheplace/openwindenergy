@@ -250,7 +250,10 @@ def createQGISFile():
         if color is None: color = convertCSSColor2RGB('grey')
         title = group['title']
 
-        if dataset == datasets_structure[0]['dataset']: title +=  ' - Tip height ' + str(group['height-to-tip']) + 'm'
+        if dataset == datasets_structure[0]['dataset']: 
+            title +=  ' - Tip height ' + str(group['height-to-tip']) + 'm'
+            if 'configuration' in group: 
+                if group['configuration'] != "": title += ' using configuration ' + group['configuration']
 
         # Add group
 
@@ -280,12 +283,12 @@ def createQGISFile():
 
         if 'children' in group:
             for child in group['children']:
-                dataset = child['dataset']
-                dataset_file = BUILD_FOLDER + 'output/' + dataset + '.gpkg'
+                child_dataset = child['dataset']
+                child_dataset_file = BUILD_FOLDER + 'output/' + child_dataset + '.gpkg'
 
                 # Add layer to group
 
-                layer = QgsVectorLayer(dataset_file, basename(dataset_file))
+                layer = QgsVectorLayer(child_dataset_file, basename(child_dataset_file))
                 layer.setName("- " + child['title'])
                 if layer.renderer() is None: continue
                 layer.renderer().symbol().setOpacity(QGIS_CHILD_OPACITY)
