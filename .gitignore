@@ -1,5 +1,14 @@
 .DS_Store
+PROCESSING
+admin.zip
+log-ogr2ogr.txt
+testcog.html
+spectral.js
 .env
+.env-sitepredictor
+.env-server
+tilemaker/
+tippecanoe/
 venv/
 __pycache__
 log.txt
@@ -25,6 +34,14 @@ landcover/
 configuration/custom-test.yml
 uk-clipping.gpkg-shm
 uk-clipping.gpkg-wal
+sitepredictor/output/
+sitepredictor/sentimentanalysis/
+sitepredictor/clipping_batch*.*
+sitepredictor/output*.*
+sitepredictor/datasets-source/
+sitepredictor/deprecated/
+sitepredictor/machinelearning/
+sitepredictor/docker-stats-graph/
 sitepredictor/finaldata.csv
 sitepredictor/finaldata copy.csv
 sitepredictor/projects_sentiment_scores_pass1.json

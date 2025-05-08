@@ -18,7 +18,7 @@ if len(sys.argv) > 1: QGIS_OUTPUT_FILE = sys.argv[1]
 
 
 # We can only set these environment variables now as setting them
-# in original .env file caused problems with ogr2ogr in main openwind.py script
+# in original .env file caused problems with ogr2ogr in main openwindenergy.py script
 
 if 'QGIS_PROJ_DATA' in os.environ: os.environ['PROJ_DATA'] = os.environ['QGIS_PROJ_DATA']
 if 'QGIS_PROJ_LIB' in os.environ: os.environ['PROJ_LIB'] = os.environ['QGIS_PROJ_LIB']
@@ -251,7 +251,7 @@ def createQGISFile():
         title = group['title']
 
         if dataset == datasets_structure[0]['dataset']: 
-            title +=  ' - Tip height ' + str(group['height-to-tip']) + 'm'
+            title +=  ' - Tip height ' + str(group['height-to-tip']) + 'm, blade radius ' + str(group['blade-radius']) + 'm'
             if 'configuration' in group: 
                 if group['configuration'] != "": title += ' using configuration ' + group['configuration']
 
@@ -270,7 +270,7 @@ def createQGISFile():
         project.addMapLayer(layer, False)
         qgis_group.addLayer(layer)
 
-        # If first group - aggregate layer - make invisible
+        # If first group, ie. aggregate layer, make invisible
 
         if dataset == datasets_structure[0]['dataset']:
 

@@ -24,17 +24,17 @@ cd ..
 
 # Setup directory with settings and Django project
 
-sudo rm -r openwind-project
-mkdir -p openwind-project
-virtualenv -p "$(which python3)" openwind-project/venv
-. openwind-project/venv/bin/activate
+sudo rm -r openwindenergy-project
+mkdir -p openwindenergy-project
+virtualenv -p "$(which python3)" openwindenergy-project/venv
+. openwindenergy-project/venv/bin/activate
 pip install Django==3.2.13 
-django-admin startproject --template=./geonode-project -e py,sh,md,rst,json,yml,ini,env,sample,properties -n monitoring-cron -n Dockerfile openwind openwind-project
+django-admin startproject --template=./geonode-project -e py,sh,md,rst,json,yml,ini,env,sample,properties -n monitoring-cron -n Dockerfile openwind openwindenergy-project
 
 
 # Run docker
 
-cd openwind-project
+cd openwindenergy-project
 python create-envfile.py --noinput
 docker compose build
 docker compose up -d

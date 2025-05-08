@@ -5,4 +5,4 @@ if [ -f ".env" ]; then
 fi
 
 . venv/bin/activate
-python3 openwind.py "$@"
+python3 openwindenergy.py "$@"

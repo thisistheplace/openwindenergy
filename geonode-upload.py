@@ -1,7 +1,7 @@
 # ***********************************************************
-# *********************** OPEN WIND *************************
+# ******************** OPEN WIND ENERGY *********************
 # ***********************************************************
-# ***** Script to upload Open Wind datasets to GeoNode ******
+# ** Script to upload Open Wind Energy datasets to GeoNode **
 # ***********************************************************
 # ***********************************************************
 # v1.0
@@ -10,7 +10,7 @@
 #
 # MIT License
 #
-# Copyright (c) Stefan Haselwimmer, WeWantWind.org, 2025
+# Copyright (c) Stefan Haselwimmer, OpenWind.energy, 2025
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -43,7 +43,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-geonode_dotenv_path = join(dirname(__file__), 'geonode', 'openwind-project', '.env')
+geonode_dotenv_path = join(dirname(__file__), 'geonode', 'openwindenergy-project', '.env')
 if isfile(geonode_dotenv_path): load_dotenv(geonode_dotenv_path)
 
 BUILD_FOLDER                    = 'build-cli/'
@@ -1063,7 +1063,7 @@ else:
 
 print("""
 \033[1;34m***********************************************************************
-******************* OPEN WIND GEONODE UPLOAD COMPLETE *****************
+**************** OPEN WIND ENERGY GEONODE UPLOAD COMPLETE *************
 ***********************************************************************\033[0m
 
 To view the layers/map in GeoNode, enter:

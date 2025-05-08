@@ -7,9 +7,9 @@
 echo "Running tileserver-gl..."
 
 if [ -n "${BUILD_FOLDER+1}" ]; then
-    docker run --name openwind-tileserver -d --rm -v "$BUILD_FOLDER"tileserver/:/data -p 8080:8080 maptiler/tileserver-gl --config config.json
+    docker run --name openwindenergy-tileserver -d --rm -v "$BUILD_FOLDER"tileserver/:/data -p 8080:8080 maptiler/tileserver-gl --config config.json
 else
-    docker run --name openwind-tileserver -d --rm -v $(pwd)/build-cli/tileserver/:/data -p 8080:8080 maptiler/tileserver-gl --config config.json
+    docker run --name openwindenergy-tileserver -d --rm -v $(pwd)/build-cli/tileserver/:/data -p 8080:8080 maptiler/tileserver-gl --config config.json
 fi
 
 
@@ -39,4 +39,4 @@ cd ../../
 
 echo "Closing tileserver-gl..."
 
-docker kill openwind-tileserver
+docker kill openwindenergy-tileserver

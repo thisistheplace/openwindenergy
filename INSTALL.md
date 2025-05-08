@@ -93,7 +93,7 @@ This should install Ubuntu-22.04 and ask you to set up an Ubuntu username and pa
 
 ### Initial setup once WSL installed
 
-Once you are in Ubuntu, install PostGIS 13 - PostGIS 13 is required with `WSL` due to issues with PostGIS 14+.
+Once you are in Ubuntu, install PostGIS 13 - PostGIS 13 is required with `WSL` due to issues with PostGIS 14+ on `WSL`.
 
 ```
 sudo apt-get update
@@ -160,6 +160,8 @@ sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin dock
 
 ## 2. All platforms - Docker-based install -> Build -> View
 
+Ensure Docker has a minimum of **12GB** memory allocated to it by going to `Settings -> Resources` and setting `Memory limit` to at least **12GB**. Also set `Swap` size to at least **2GB**.
+
 Clone the Open Wind Energy repository:
 ```
 git clone https://github.com/open-wind/openwindenergy.git
@@ -172,7 +174,7 @@ Run the Open Wind Energy build stage (Docker-based mode) by typing:
 ./build-docker.sh
 ```
 
-This will use a default value (124.2 metres) for the turbine height to tip. 
+This will use a default value (124.2 metres) for the turbine height to tip and a default value ( metres) for the turbine blade radius. 
 
 Alternatively, specify the turbine height to tip by adding it to the prompt:
 
@@ -188,6 +190,20 @@ For example:
 ./build-docker.sh 149.9
 ``` 
 
+Specify the turbine blade radius by adding it after the turbine height to tip:
+
+```
+./build-docker.sh [HEIGHT TO TIP] [BLADE RADIUS]
+```
+
+For example:
+
+```
+./build-docker.sh 99.5 30.5
+./build-docker.sh 120 40
+./build-docker.sh 149.9 45
+``` 
+
 Once the build has completed (10-20 hours), view the final Open Wind Energy constraint layers by running:
 
 ```
@@ -195,6 +211,28 @@ Once the build has completed (10-20 hours), view the final Open Wind Energy cons
 ```
 
 Or alternatively open the QGIS file located at `build-docker/windconstraints--latest.qgs`.
+
+### Memory-related problems with Docker
+
+You may experience problems with Docker due to insufficient memory. For example, the build process may fail with the following error:
+
+```
+psycopg2.OperationalError: SSL SYSCALL error: EOF detected
+```
+
+If you see this error, change Docker's `Resources` settings so it has at least **12Gb** memory and **2Gb** swap size allocated to it:
+
+- Open `Docker Desktop`.
+- Select `Settings...` then `Resources`.
+- Change Docker's `Memory limit` to >= `12Gb` and `Swap` to >= `2Gb`.
+
+If you are still experiencing memory issues building OpenWind Energy on Docker, increase the swap size to > `4Gb` by editing the Docker config file directly:
+
+- Find the location of your platform's Docker config file by referring to https://docs.docker.com/desktop/settings-and-maintenance/settings/
+- Edit the config file and set the `SwapMiB` setting to at least `10000`, ie. 10Gb.
+- Fully quit and restart Docker so the new `SwapMiB` setting takes effect.
+- Rerun `./build-docker.sh`
+
 
 ### Next steps:
 

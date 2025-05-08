@@ -11,6 +11,12 @@ psycopg2-binary
 ckanapi
 owslib
 xmltodict
-
+pyshp
+rasterio==1.3.9
+plotly
+h2o
+Jinja2
+flask
+validators
 # geojson
 # turfpy

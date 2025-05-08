@@ -1,5 +1,7 @@
 tip-height:
   124.2
+blade-radius:
+  47.8
 
 osm:
   https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf
@@ -122,7 +124,7 @@ buffers:
   railway-lines--uk:
     1.1 * height-to-tip
   separation-distance-from-residential--uk:
-    400
+    6 * blade-radius
 
 style:
   aviation-and-exclusion-areas:

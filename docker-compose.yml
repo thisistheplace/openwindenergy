@@ -1,46 +1,50 @@
-# openwind docker-compose.yml
+# openwindenergy docker-compose.yml
 
 services:
 
-  openwind-postgis:
-    container_name: openwind-postgis
+  openwindenergy-postgis:
+    container_name: openwindenergy-postgis
     image: kartoza/postgis:17-3.5
     restart: always
     ports:
       - 5432:5432
     environment:
+      TZ: "Europe/London"
       POSTGRES_DB: $POSTGRES_DB
       POSTGRES_USER: $POSTGRES_USER
       POSTGRES_PASSWORD: $POSTGRES_PASSWORD 
       PGHOST: "/var/run/postgresql"
       PGPORT: "5432"
-    hostname: openwind-postgis
+    hostname: openwindenergy-postgis
     volumes:
       - ./build-docker/postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 15s
       timeout: 5s
-      retries: 5
+      retries: 20
 
-  openwind-fonts:
-    container_name: openwind-fonts
+  openwindenergy-fonts:
+    container_name: openwindenergy-fonts
     volumes:
       - ./build-docker:/build-docker
     # Force linux/amd64 emulation as 'npm i -g fontnik' doesn't complete on arch64 
     platform: linux/amd64
+    environment:
+      TZ: "Europe/London"
     build:
       context: .
-      dockerfile: openwind-fonts.dockerfile
+      dockerfile: openwindenergy-fonts.dockerfile
 
-  openwind-build:
-    container_name: openwind-build
+  openwindenergy-build:
+    container_name: openwindenergy-build
     volumes:
-      - ./build-docker:/usr/src/openwind/build-docker
-      - ./build-docker/coastline:/usr/src/openwind/coastline
-      - ./build-docker/landcover:/usr/src/openwind/landcover
+      - ./build-docker:/usr/src/openwindenergy/build-docker
+      - ./build-docker/coastline:/usr/src/openwindenergy/coastline
+      - ./build-docker/landcover:/usr/src/openwindenergy/landcover
     environment:
-      POSTGRES_HOST: openwind-postgis
+      TZ: "Europe/London"
+      POSTGRES_HOST: openwindenergy-postgis
       POSTGRES_DB: $POSTGRES_DB
       POSTGRES_USER: $POSTGRES_USER
       POSTGRES_PASSWORD: $POSTGRES_PASSWORD 
@@ -49,9 +53,9 @@ services:
       TILESERVER_URL: $TILESERVER_URL
     build:
       context: .
-      dockerfile: openwind-build.dockerfile
+      dockerfile: openwindenergy-build.dockerfile
     depends_on:
-      openwind-postgis:
+      openwindenergy-postgis:
         condition: service_healthy
     stdin_open: true
     tty: true

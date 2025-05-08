@@ -5,7 +5,7 @@ if ! [ -f ".env" ]; then
 fi
 
 docker compose up -d
-docker exec -ti openwind-build /usr/src/openwind/build-cli.sh "$@"
-#docker exec -ti openwind-build /bin/bash
+docker exec -ti openwindenergy-build /usr/src/openwindenergy/build-cli.sh "$@"
+#docker exec -ti openwindenergy-build /bin/bash
 docker compose down
 

@@ -12,7 +12,7 @@
 #
 # MIT License
 #
-# Copyright (c) Stefan Haselwimmer, WeWantWind.org, 2025
+# Copyright (c) Stefan Haselwimmer, OpenWind.energy, 2025
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -55,6 +55,7 @@ import h2o
 import pandas as pd
 import numpy as np
 import geopandas as gpd
+from rasterio.transform import from_origin
 from datetime import datetime
 from pathlib import Path
 from psycopg2 import sql
@@ -71,21 +72,29 @@ pd.options.plotting.backend = "plotly"
 
 gdal.DontUseExceptions() 
 
-load_dotenv('../.env')
+if not isfile('../.env-sitepredictor'): shutil.copy('../.env', '../.env-sitepredictor')
+
+# load_dotenv('../.env')
+load_dotenv('../.env-sitepredictor')
 
 WORKING_FOLDER                      = str(Path(__file__).absolute().parent) + '/'
 DATASETS_FOLDER                     = WORKING_FOLDER + 'datasets/'
+OUTPUT_FOLDER                       = WORKING_FOLDER + 'output/'
 OSM_MAIN_DOWNLOAD                   = 'https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf'
 OSM_CONFIG_FOLDER                   = 'osm-export-yml/'
 OSM_EXPORT_DATA                     = DATASETS_FOLDER + 'osm-export'
 WINDSPEED_URL                       = 'https://wewantwind.org/static/gis/windspeeds.geojson.zip'
 WINDSPEED_DATASET                   = 'windspeeds-noabl--uk'
 CUSTOM_CONFIGURATION_PREFIX         = '__'
+CENSUS_2011_ZIP_URL                 = 'https://data.openwind.energy/dataset/6b00ae5f-850c-4c1d-9b65-e2a78715b85e/resource/73141902-5898-4124-90cb-40c6b5ea8059/download/sitepredictor-census-2011.zip'
+WINDTURBINES_ALLPROJECTS_URL        = 'https://data.openwind.energy/dataset/308b0001-8c70-4a64-adb3-068a94c775c4/resource/2b325fd4-dad2-4e62-8d7b-7a87c339a501/download/windturbines-all-projects-uk.geojson'
+WINDTURBINES_ALLPROJECTS_DATASET    = basename(WINDTURBINES_ALLPROJECTS_URL).replace('.geojson', '').replace('-uk', '--uk')
 WINDTURBINES_OPERATIONAL_DATASET    = 'windturbines-operational--uk'
-WINDTURBINES_ALLPROJECTS_DATASET    = 'windturbines-all-projects--uk'
 WINDTURBINES_MIN_HEIGHTTIP          = 75 # Minimum height to tip in metres for including failed + successful wind turbines in analysis
 FOOTPATHS_SINGLELINES_DATASET       = 'public-footpaths--uk'
 FOOTPATHS_HISTORICAL_DATASET        = FOOTPATHS_SINGLELINES_DATASET + '--hist'
+MINORROADS_SINGLELINES_DATASET      = 'minor_roads__uk'
+MINORROADS_HISTORICAL_DATASET       = MINORROADS_SINGLELINES_DATASET + '--hist'
 POSTGRES_HOST                       = os.environ.get("POSTGRES_HOST")
 POSTGRES_DB                         = os.environ.get("POSTGRES_DB")
 POSTGRES_USER                       = os.environ.get("POSTGRES_USER")
@@ -106,30 +115,36 @@ TRANSFORMER_FROM_27700              = None
 TRANSFORMER_SOURCE_4326             = None
 TRANSFORMER_DEST_27700              = None
 TRANSFORMER_TO_27700                = None
-# RASTER_RESOLUTION                   = 10000 # Number of metres per raster grid square
+RASTER_RESOLUTION                   = 250 # Number of metres per raster grid square
 # # RASTER_RESOLUTION                   = 250 # Number of metres per raster grid square
-RASTER_RESOLUTION                   = 20 # Number of metres per raster grid square
+# RASTER_RESOLUTION                   = 20 # Number of metres per raster grid square
 RASTER_XMIN                         = 0 
 RASTER_YMIN                         = 7250
 RASTER_XMAX                         = 664000 
 RASTER_YMAX                         = 1296000
-SAMPLING_GRID                       = "sitepredictor__sampling_grid_" + str(RASTER_RESOLUTION) + "_m__uk"
+SAMPLING_GRID                       = "sitepredictor__sampling_" + str(RASTER_RESOLUTION) + "_m__uk"
+BATCH_SAMPLING_GRID                 = "sitepredictor__batchsampling_" + str(RASTER_RESOLUTION) + "_m"
+TEST_SAMPLING_GRID_SIZE             = 16000
 QUIET_MODE                          = True
 RASTER_OUTPUT_FOLDER                = "/Volumes/A002/Distance_Rasters/rasters/"
 GEOCODE_POSITION_LOOKUP             = {}
 COUNCIL_POSITION_LOOKUP             = {}
 CENSUS_CACHE                        = {}
 POLITICAL_CACHE                     = {}
-OUTPUT_DATA_ALLTURBINES             = WORKING_FOLDER + 'output-turbines.csv'
-OUTPUT_DATA_SAMPLEGRID              = WORKING_FOLDER + 'output-samplegrid.csv'
-OUTPUT_ML_RESULTS                   = WORKING_FOLDER + 'output-machinelearning'
+WINDSPEED_CACHE                     = {}
+OUTPUT_DATA_ALLTURBINES             = OUTPUT_FOLDER + 'output-turbines.csv'
+OUTPUT_DATA_SAMPLEGRID              = OUTPUT_FOLDER + 'output-samplegrid.csv'
+OUTPUT_ML_GEOJSON                   = OUTPUT_FOLDER + 'output-machinelearning.geojson'
+OUTPUT_ML_CSV                       = OUTPUT_FOLDER + 'output-machinelearning.csv'
+OUTPUT_ML_RASTER                    = OUTPUT_FOLDER + 'output-machinelearning.tif'
 ML_FOLDER                           = WORKING_FOLDER + "machinelearning/"
-ML_MAX_RUNTIME_SECS                 = 5*60
-# ML_MAX_RUNTIME_SECS                 = 30*60
+# ML_MAX_RUNTIME_SECS                 = 5*60
+ML_MAX_RUNTIME_SECS                 = 30*60
 ML_STATUS_SUCCESS                   = ['Operational', 'Awaiting Construction', 'Under Construction', 'Decommissioned', 'Planning Permission Expired']
 ML_STATUS_FAILURE                   = ['Application Refused', 'Abandoned', 'Appeal Withdrawn', 'Application Withdrawn', 'Appeal Refused']
 ML_STATUS_PENDING                   = ['Revised', 'Application Submitted', 'Appeal Lodged', 'No Application Required']
 ALLTURBINES_DF                      = None
+CKAN_USER_AGENT                     = 'ckanapi/1.0 (+https://openwind.energy)'
 
 # We try and include as many columns as possible to ML 
 # but there are some columns that are clearly irrelevant to prediction
@@ -139,6 +154,7 @@ ML_IGNORE_COLUMNS                   = [
                                         'project_name','project_notes','project_osm','project_pk','source','turbine_bladeradius','turbine_hubheight',\
                                         'turbine_name','turbine_grid_coordinates_srs','turbine_grid_coordinates_easting','turbine_grid_coordinates_northing',\
                                         'turbine_lnglat_lng','turbine_lnglat_lat', 'project_operator',\
+                                        'political_majority',\
                                         'project_date_start', 'project_date_end', 'project_date_operational', 'project_date_underconstruction', \
                                     ]
 
@@ -323,36 +339,46 @@ TABLES_TO_EXCLUDE                   =   [ \
                                             SAMPLING_GRID, \
                                             'uk__output_grid__100000_m', \
                                             WINDSPEED_DATASET.replace('-', '_'),                    # We don't care about distance on this dataset \
-                                            WINDTURBINES_OPERATIONAL_DATASET.replace('-', '_'),     # We running query off wind turbines so ignore wind turbine datasets \
-                                            WINDTURBINES_ALLPROJECTS_DATASET.replace('-', '_'),     # We running query off wind turbines so ignore wind turbine datasets \
+                                            WINDTURBINES_OPERATIONAL_DATASET.replace('-', '_'),     # We are running query off wind turbines so ignore wind turbine datasets \
+                                            WINDTURBINES_ALLPROJECTS_DATASET.replace('-', '_'),     # We are running query off wind turbines so ignore wind turbine datasets \
                                             'public_roads_a_and_b_roads_and_motorways__uk__pro',    # osm-export-tool divides out components \
                                             'power_lines__uk__pro',                                 # osm-export-tool divides out components \
                                         ]
 
 # ***********************************************************
-# Parameters that specify how close footpath needs to be to 
-# turbines to count as 'turbine-caused' footpath
+# Parameters that specify how close footpath/service-road 
+# needs to be to turbines to count as 'turbine-caused' 
+# footpath/service-road.
 # All parameters are in metres
 # ***********************************************************
 
-# Maximum distance between start/end of footpath and turbine to count as turbine-created footpath
-# ie. if a footpath starts or eventually leads to a turbine within 100 metres, then turbine-created footpath
+# Maximum distance between start/end of footpath/service-road 
+# and turbine to count as turbine-created footpath/service-road
+# ie. if a footpath or service road starts or eventually 
+# leads to a turbine within 100 metres, then => turbine-created 
+# footpath/service-road. In contrat to MAXIMUM_DISTANCE_LINE, 
+# below, this is unlikely to distort ML results in trivial way
 
 MAXIMUM_DISTANCE_ENDPOINT           = 100
 
-# Maxiumum distance between point along line and turbine to count as turbine-created footpath
-# ie. if footpath comes within 50 metres of turbine along its stretch, then turbine-created footpath
+# Maxiumum distance between point along line and turbine to 
+# count as turbine-created footpath/service-road
+# ie. if footpath comes within 50 metres of turbine along 
+# its stretch, then => turbine-created footpath/service-road
 # NOTE: 50 metres is typical turbine micrositing distance
+# ******************* WARNING ***************************
+# This will mean there is likely to be minimum 50 metre 
+# buffer around footpaths and service roads in final ML 
+# as we're eliminating any footpaths/service-roads < 50m
+# However, this is better than distorting results with 
+# footpaths and service roads that weren't there before
+# construction - which will result in 'being close to 
+# footpaths/service-roads' significantly increasing 
+# P(SUCCESS) - because almost all successful projects 
+# have access footpaths/service-roads.
+# *******************************************************
 
 MAXIMUM_DISTANCE_LINE               = 50
-
-# Buffer distance when selecting turbine positions based on footpath start/end points
-
-BUFFER_DISTANCE                     = 1000
-
-# Distance to 'walk' along footpath when checking proximity of turbine to segment of footpath line
-
-FOOTPATH_WALK_DISTANCE              = 10
 
 
 
@@ -410,6 +436,13 @@ def LogMessage(logtext):
 
     logging.info(logtext)
 
+def LogStage(logstage):
+    """
+    Logs stage for debugging purposes - easy to switch on and off here
+    """
+
+    # LogMessage(logstage)
+
 def LogError(logtext):
     """
     Logs error message to console with timestamp
@@ -421,6 +454,12 @@ def attemptDownloadUntilSuccess(url, file_path):
     """
     Keeps attempting download until successful
     """
+
+    global CKAN_USER_AGENT
+
+    opener = urllib.request.build_opener()
+    opener.addheaders = [('User-agent', CKAN_USER_AGENT)]
+    urllib.request.install_opener(opener)
 
     while True:
         try:
@@ -660,6 +699,11 @@ def createFeaturesRaster(table, output):
 
     if isfile(output): os.remove(output)
 
+    sql = "SELECT ST_Transform(geom, 27700) FROM " + table
+
+    if 'listed_buildings' in table:
+        sql = "SELECT ST_Transform(ST_Centroid(geom), 27700) FROM " + table + " WHERE ST_geometrytype(geom) = 'ST_Polygon' UNION SELECT ST_Transform(geom, 27700) FROM " + table + " WHERE ST_geometrytype(geom) = 'ST_Point'"
+
     runSubprocess([ "gdal_rasterize", \
                     "-burn", "1", \
                     "-tr", str(RASTER_RESOLUTION), str(RASTER_RESOLUTION), \
@@ -668,7 +712,7 @@ def createFeaturesRaster(table, output):
                     "-ot", "Float64", \
                     "-of", "GTiff", \
                     'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
-                    "-sql", "SELECT ST_Transform(geom, 27700) FROM " + table, \
+                    "-sql", sql, \
                     output])
 
 def createFeaturesRasterWithValue(table, output, value_column):
@@ -722,11 +766,13 @@ def getDistanceRasterPath(table):
 
     return RASTER_OUTPUT_FOLDER + 'distance__' + str(RASTER_RESOLUTION) + '_m_resolution__' + table + '.tif'
 
-def createDistanceRaster(input, output):
+def createDistanceRaster(input, output, batch_index, batch_grid_spacing):
     """
     Creates distance raster from feature raster
     """
 
+    global RASTER_RESOLUTION
+    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
     global CLIPPING_PATH, RASTER_OUTPUT_FOLDER
 
     inverted_file = input.replace('.tif', '__inverted.tif')
@@ -776,15 +822,33 @@ def createDistanceRaster(input, output):
     if isfile(original_distance_file): os.remove(original_distance_file)
     if isfile(inverted_distance_file): os.remove(inverted_distance_file)
 
-    # LogMessage("Clipping raster to clipping path: " + output)
+    if batch_index is not None:
 
-    # runSubprocess([ "gdalwarp", \
-    #                 "-of", "GTiff", \
-    #                 "-cutline", "-dstnodata", "-9999", CLIPPING_PATH, \
-    #                 "-crop_to_cutline", temp_file, \
-    #                 output ])
+        batch_output = buildBatchRasterFilename(output, batch_index, batch_grid_spacing)
+        batch_clipping = buildBatchRasterClippingFilename(batch_index, batch_grid_spacing)
 
-    # if isfile(temp_file): os.remove(temp_file)
+        if not isfile(batch_clipping):
+            LogMessage("Exporting batch clipping path")
+
+            batch_grid_table = buildBatchGridTableName(batch_index, batch_grid_spacing)
+
+            runSubprocess([ "ogr2ogr", \
+                            "-f", "GeoJSON", \
+                            batch_clipping, \
+                            'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
+                            "--config", "OGR_PG_ENABLE_METADATA=NO", \
+                            "-dialect", "sqlite", \
+                            "-sql", \
+                            "SELECT ST_Buffer(geom, " + str(RASTER_RESOLUTION) + ") geometry FROM '" + batch_grid_table + "' WHERE id=" + str(batch_index), \
+                            "-nln", "batch_clipping" ])
+
+        LogMessage("Clipping raster to clipping path: " + output)
+
+        runSubprocess([ "gdalwarp", \
+                        "-of", "GTiff", \
+                        "-cutline", "-dstnodata", "-9999", batch_clipping, \
+                        "-crop_to_cutline", output, \
+                        batch_output ])
 
 def createCappedDistanceRaster(input, output, capvalue):
     """
@@ -799,7 +863,68 @@ def createCappedDistanceRaster(input, output, capvalue):
                     "-A", input, \
                     "--outfile=" + output, \
                     '--calc="(A*(A<=' + str(capvalue) + '))+(' + str(capvalue) + '*(A>' + str(capvalue) + '))"' ])
-    
+
+def createRasterFromGeoJSON(geojson_path, raster_path):
+    """
+    Creates raster from GeoJSON
+    """
+
+    global RASTER_RESOLUTION, OUTPUT_ML_CSV
+
+    gridsquare_offset_negative = int(RASTER_RESOLUTION / 2)
+
+    raster_data = getJSON(geojson_path)
+
+    with open(OUTPUT_ML_CSV, 'w', newline='') as csvfile:
+        fieldnames = ['easting', 'northing', 'probability']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+    with open(OUTPUT_ML_CSV, 'a', newline='') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        for raster_item in raster_data['features']:
+            coordinates = raster_item['geometry']['coordinates']
+            easting, northing = lnglat_to_bngrs(coordinates[0], coordinates[1])
+            writer.writerow({'easting': int(easting), 'northing': int(northing), 'probability': raster_item['properties']['prediction']})
+
+    df = pd.read_csv(OUTPUT_ML_CSV)
+
+    nodata_val = -9999
+    x_min = df['easting'].min()
+    x_max = df['easting'].max()
+    y_min = df['northing'].min()
+    y_max = df['northing'].max()
+    width = int(np.ceil((x_max - x_min) / RASTER_RESOLUTION))
+    height = int(np.ceil((y_max - y_min) / RASTER_RESOLUTION)) + 1
+    raster = np.full((height, width), nodata_val, dtype=np.float32)
+
+    for _, row in df.iterrows():
+        col = int((row["easting"] - x_min) / RASTER_RESOLUTION)
+        row_idx = int((y_max - row["northing"]) / RASTER_RESOLUTION)
+        raster[row_idx, col] = row["probability"]
+
+    transform = from_origin(x_min - gridsquare_offset_negative, y_max + gridsquare_offset_negative, RASTER_RESOLUTION, RASTER_RESOLUTION)
+
+    temp_raster_path = 'temp.tif'
+    if isfile(temp_raster_path): os.remove(temp_raster_path)
+
+    with rasterio.open(
+        raster_path,
+        "w",
+        driver="GTiff",
+        height=height,
+        width=width,
+        count=1,
+        dtype=np.float32,
+        crs="EPSG:27700",
+        transform=transform,
+        nodata=nodata_val,
+    ) as dst:
+        dst.write(raster, 1)
+
+    # cropRaster(temp_raster_path, raster_path)
+    if isfile(temp_raster_path): os.remove(temp_raster_path)
+
 def ingrs_to_lnglat(easting, northing):
     """
     Transforms Ireland NG to lng, lat
@@ -861,6 +986,21 @@ def postgisCheckTableExists(table_name):
     cur.close()
     return tableexists
 
+def postgisCheckColumnExists(table_name, column_name):
+    """
+    Checks whether column exists in table
+    """
+
+    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+
+    table_name = reformatTableName(table_name)
+    conn = psycopg2.connect(host=POSTGRES_HOST, dbname=POSTGRES_DB, user=POSTGRES_USER, password=POSTGRES_PASSWORD)
+    cur = conn.cursor()
+    cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name=%s AND column_name=%s);", (table_name, column_name, ))
+    columnexists = cur.fetchone()[0]
+    cur.close()
+    return columnexists
+
 def postgisCheckHistoricalTableExists(table_name):
     """
     Checks whether historical version of table exists
@@ -894,14 +1034,12 @@ def postgisImportDatasetGIS(dataset_path, dataset_table, orig_srs='EPSG:4326'):
 
     if '.gpkg' in dataset_path: orig_srs = getGPKGProjection(dataset_path)
 
-
     ogr2ogr_array = ["ogr2ogr", \
                             "-f", "PostgreSQL", \
                             'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
                             dataset_path, \
                             "-overwrite", \
                             "-nln", dataset_table, \
-                            "--config", "OGR_PG_ENABLE_METADATA=NO", \
                             "-lco", "GEOMETRY_NAME=geom", \
                             "-lco", "OVERWRITE=YES", \
                             "-s_srs", orig_srs, \
@@ -910,6 +1048,8 @@ def postgisImportDatasetGIS(dataset_path, dataset_table, orig_srs='EPSG:4326'):
     if dataset_table in ['sitepredictor__infuse_lsoa__uk', 'sitepredictor__infuse_oa__uk']: 
         ogr2ogr_array.append("-nlt")
         ogr2ogr_array.append("MULTIPOLYGON")
+
+    ogr2ogr_array += ["--config", "OGR_PG_ENABLE_METADATA", "NO"]
 
     runSubprocess(ogr2ogr_array)
 
@@ -1007,7 +1147,8 @@ def postgisGetBasicProcessedTables():
     table_name NOT IN ('spatial_ref_sys') AND 
     table_name LIKE '%%\_\_pro' AND 
     table_name NOT LIKE '%%\_\_buf\_%%' AND 
-    table_name NOT LIKE 'tipheight\_%%' AND 
+    table_name NOT LIKE 'tip%%' AND 
+    table_name NOT LIKE 'uk\_\_%%' AND 
     table_name NOT LIKE '%%clipping%%' AND 
     table_name NOT LIKE 'osm_boundaries' AND 
     table_name NOT LIKE '\_scratch%%' AND
@@ -1038,7 +1179,8 @@ def postgisGetBasicUnprocessedTables():
     table_name NOT IN ('spatial_ref_sys') AND 
     table_name NOT LIKE '%%\_\_pro' AND 
     table_name NOT LIKE '%%\_\_buf\_%%' AND 
-    table_name NOT LIKE 'tipheight\_%%' AND 
+    table_name NOT LIKE 'tip%%' AND 
+    table_name NOT LIKE 'uk\_\_%%' AND 
     table_name NOT LIKE '%%clipping%%' AND 
     table_name NOT LIKE 'osm_boundaries' AND 
     table_name NOT LIKE '\_scratch%%' AND
@@ -1079,7 +1221,8 @@ def postgisGetUKBasicUnprocessedTables():
     table_name LIKE '%%\_\_uk' AND 
     table_name NOT LIKE '%%\_\_pro' AND 
     table_name NOT LIKE '%%\_\_buf\_%%' AND 
-    table_name NOT LIKE 'tipheight\_%%' AND 
+    table_name NOT LIKE 'tip%%' AND 
+    table_name NOT LIKE 'uk\_\_%%' AND 
     table_name NOT LIKE '%%clipping%%' AND 
     table_name NOT LIKE 'osm_boundaries' AND 
     table_name NOT LIKE '\_scratch%%' AND 
@@ -1420,6 +1563,73 @@ def buildUnionTableName(layername):
 
     return reformatTableName(layername) + '__union'
 
+def buildBatchSamplingGridTableName(batch_index, batch_grid_spacing):
+    """
+    Builds batch sampling grid table name
+    """
+
+    global BATCH_SAMPLING_GRID
+
+    return BATCH_SAMPLING_GRID + "__idx_" + str(batch_index) + "_spc_" + str(batch_grid_spacing) + "_m__uk"
+
+def buildBatchFilename(file_name, batch_index, batch_grid_spacing):
+    """
+    Builds batch grid generic filename
+    """
+
+    file_name = file_name.replace('.csv', '').replace('.geojson', '').replace('.tif', '')
+
+    return file_name + '-batch-' + str(batch_index) + '-' + str(batch_grid_spacing) + 'm'
+
+def buildBatchGridOutputData(output_data, batch_index, batch_grid_spacing):
+    """
+    Builds batch grid output data filename
+    """
+
+    if batch_index is None: return output_data
+
+    return buildBatchFilename(output_data, batch_index, batch_grid_spacing) + '.csv'
+
+def buildBatchGridOutputGeoJSON(output_data, batch_index, batch_grid_spacing):
+    """
+    Builds batch grid output GeoJSON filename
+    """
+
+    if batch_index is None: return output_data
+
+    return buildBatchFilename(output_data, batch_index, batch_grid_spacing) + '.geojson'
+
+def buildBatchGridOutputGeoTIFF(output_data, batch_index, batch_grid_spacing):
+    """
+    Builds batch grid output GeoTIFF filename
+    """
+
+    if batch_index is None: return output_data
+
+    return buildBatchFilename(output_data, batch_index, batch_grid_spacing) + '.tif'
+
+def buildBatchGridTableName(batch_index, batch_grid_spacing):
+    """
+    Builds batch grid table name
+    """
+
+    return "sitepredictor__batch_grid__index_" + str(batch_index) + "_spacing_" + str(batch_grid_spacing) + "_m__uk"
+
+def buildBatchRasterFilename(output, batch_index, batch_grid_spacing):
+    """
+    Builds batch raster filename
+    """
+
+    return output.replace('.tif', '') + '_batch_' + str(batch_index) + '_' + str(batch_grid_spacing) + 'm.tif'
+
+def buildBatchRasterClippingFilename(batch_index, batch_grid_spacing):
+    """
+    Builds batch raster filename
+    """
+
+    return 'clipping_batch_' + str(batch_index) + '_' + str(batch_grid_spacing) + 'm.geojson'
+
+    
 # ***********************************************************
 # *************** Machine learning functions ****************
 # ***********************************************************
@@ -1431,7 +1641,10 @@ def machinelearningInitialize():
 
     global ML_FOLDER
 
-    if not h2o.is_initialized(): h2o.init()
+    try:
+        h2o.init(start_h2o=False)
+    except Exception as e:
+        h2o.init()
 
     makeFolder(ML_FOLDER)
 
@@ -1534,7 +1747,7 @@ def machinelearningPrepareTrainingData():
     df = df.sample(frac=1)
 
     # Use 'project_date_end' as 'date_time' x-axis - useful for displaying all results on plot
-    df['date_time'] = pd.to_datetime(df['project_date_end'], dayfirst=True)
+    df['date_time'] = pd.to_datetime(df['project_date_end'], format='%Y-%m-%d')
 
     # Remove records where status is pending
     df = df[~df['project_status'].isin(ML_STATUS_PENDING)]
@@ -1562,21 +1775,23 @@ def machinelearningPrepareTrainingData():
 
     return df_train
 
-def machinelearningRunModelOnSamplingGrid():
+def machinelearningRunModelOnSamplingGrid(batch_index, batch_grid_spacing):
     """
     Runs machine learning model on sample grid
     """
 
     global OUTPUT_DATA_SAMPLEGRID
 
+    output_data = buildBatchGridOutputData(OUTPUT_DATA_SAMPLEGRID, batch_index, batch_grid_spacing)
+
     # Initialize machine learning
     machinelearningInitialize()
 
     # Load dataset to test
-    df_samplegrid = pd.read_csv(OUTPUT_DATA_SAMPLEGRID, delimiter=',', low_memory=False)
+    df_samplegrid = pd.read_csv(output_data, delimiter=',', low_memory=False)
 
     # Use project_date_end as date_time x-axis
-    df_samplegrid['date_time'] = pd.to_datetime(df_samplegrid['project_date_end'], dayfirst=True)
+    df_samplegrid['date_time'] = pd.to_datetime(df_samplegrid['project_date_end'], format='%Y-%m-%d')
     df_samplegrid = df_samplegrid.set_index('date_time').sort_index()
 
     # Make copy of sample grid before we make further changes so we 
@@ -1601,14 +1816,17 @@ def machinelearningRunModelOnSamplingGrid():
     df_predicted = y_pred.as_data_frame().to_numpy().ravel()
     print(y_pred.as_data_frame())
 
-    machinelearningOutputGridResults(df_original, df_predicted)
+    machinelearningOutputGridResults(df_original, df_predicted, batch_index, batch_grid_spacing)
 
-def machinelearningOutputGridResults(df_original, df_predicted):
+def machinelearningOutputGridResults(df_original, df_predicted, batch_index, batch_grid_spacing):
     """
     Output results of machine learning predictions for array of points
     """
 
-    global OUTPUT_ML_RESULTS
+    global OUTPUT_ML_GEOJSON, OUTPUT_ML_RASTER
+    
+    output_ml_geojson = buildBatchGridOutputGeoJSON(OUTPUT_ML_GEOJSON, batch_index, batch_grid_spacing)
+    output_ml_geotiff = buildBatchGridOutputGeoTIFF(OUTPUT_ML_RASTER, batch_index, batch_grid_spacing)
 
     features = []
     count = 0
@@ -1635,8 +1853,11 @@ def machinelearningOutputGridResults(df_original, df_predicted):
         'features': features
     }
 
-    with open(OUTPUT_ML_RESULTS + '.geojson', "w", encoding='UTF-8') as writerfileobj:
+    with open(output_ml_geojson, "w", encoding='UTF-8') as writerfileobj:
         json.dump(featurecollection, writerfileobj, ensure_ascii=False, indent=4)
+
+    createRasterFromGeoJSON(output_ml_geojson, output_ml_geotiff)
+
 
 # ***********************************************************
 # ************** Application logic functions ****************
@@ -1682,12 +1903,13 @@ def osmDownloadData():
     """
 
     global OSM_MAIN_DOWNLOAD, DATASETS_FOLDER, OSM_EXPORT_DATA, OSM_CONFIG_FOLDER, OVERALL_CLIPPING_FILE
+    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
 
     makeFolder(DATASETS_FOLDER)
 
     if not isfile(DATASETS_FOLDER + basename(OSM_MAIN_DOWNLOAD)):
 
-        LogMessage("Downloading latest OSM data for britain and ireland")
+        LogMessage("Downloading latest OSM data for United Kingdom")
 
         runSubprocess(["wget", OSM_MAIN_DOWNLOAD, "-O", DATASETS_FOLDER + basename(OSM_MAIN_DOWNLOAD)])
 
@@ -1716,6 +1938,24 @@ def osmDownloadData():
                 yaml_all_content[yaml_content_key] = yaml_content[yaml_content_key]
 
         with open(yaml_all_filename, "w") as yaml_file: yaml_file.write(yaml.dump(yaml_all_content))
+
+        if not isfile(OVERALL_CLIPPING_FILE):
+
+            LogMessage("Generating " + OVERALL_CLIPPING_FILE + " for overall clipping when using osm-export-tool")
+
+            clipping_table = reformatTableName(OVERALL_CLIPPING_FILE)
+            clipping_union_table = buildUnionTableName(clipping_table)
+
+            inputs = runSubprocess(["ogr2ogr", \
+                                    OVERALL_CLIPPING_FILE, \
+                                    'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
+                                    "-overwrite", \
+                                    "-nln", clipping_union_table, \
+                                    "-nlt", 'MULTIPOLYGON', \
+                                    "-dialect", "sqlite", \
+                                    "-sql", \
+                                    "SELECT geom geometry FROM '" + clipping_union_table + "'", \
+                                    "--config", "OGR_PG_ENABLE_METADATA", "NO" ])
 
         runSubprocess(["osm-export-tool", DATASETS_FOLDER + basename(OSM_MAIN_DOWNLOAD), OSM_EXPORT_DATA, "-m", yaml_all_filename, "--clip", OVERALL_CLIPPING_FILE])
 
@@ -1892,6 +2132,67 @@ def generateHistoricalFootpaths():
 
     LogMessage("Historical footpaths recreation: COMPLETED")
 
+def generateHistoricalMinorRoads():
+    """
+    Process minor roads to remove those service roads likely to have been created to provide access to new turbines
+    ie. leaving only those minor roads likely to have existed before specific wind turbines were built
+    """
+
+    global MINORROADS_SINGLELINES_DATASET, MINORROADS_HISTORICAL_DATASET, WINDTURBINES_OPERATIONAL_DATASET
+    global MAXIMUM_DISTANCE_ENDPOINT, MAXIMUM_DISTANCE_LINE
+
+    osmDownloadData()
+
+    minorroads_original_table = reformatTableName(MINORROADS_SINGLELINES_DATASET)
+    minorroads_historical_table = reformatTableName(MINORROADS_HISTORICAL_DATASET) + '__pro__27700'
+    windturbines_operational_table = reformatTableName(WINDTURBINES_OPERATIONAL_DATASET)
+
+    if not postgisCheckTableExists(minorroads_historical_table):
+
+        LogMessage("Historical minor roads recreation: creating copy of minor roads in table " + minorroads_historical_table)
+
+        # We need access to 'highway' field so copy from originally imported table rather than '__pro__27700' version
+        postgisExec("CREATE TABLE %s AS SELECT fid, highway, ST_Transform(geom, 27700) geom FROM %s;", (AsIs(minorroads_historical_table), AsIs(minorroads_original_table), ))
+        postgisExec("CREATE INDEX " + minorroads_historical_table + "_idx ON %s USING GIST (geom);", (AsIs(minorroads_historical_table), ))
+        postgisExec("CREATE INDEX highway_idx ON " + minorroads_historical_table + "(highway);")
+
+        LogMessage("Historical minor roads recreation: Retrieving operational turbines")
+
+        operational_turbines = postgisGetResults("SELECT fid FROM %s;", (AsIs(windturbines_operational_table), ))
+
+        LogMessage("Historical minor roads recreation: Deleting turbine-specific minor service roads...")
+
+        for count in range(len(operational_turbines)):
+
+            turbine_fid = operational_turbines[count][0]
+
+            LogMessage(" --> Deleting turbine-specific minor service roads for turbine: " + str(count + 1) + "/" + str(len(operational_turbines)))
+
+            postgisExec("""
+            DELETE FROM %s minorroad 
+            WHERE 
+            minorroad.highway = 'service' AND 
+            (
+                ((SELECT MIN(ST_Distance(ST_StartPoint(minorroad.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s) OR 
+                ((SELECT MIN(ST_Distance(ST_EndPoint(minorroad.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)
+            )""", \
+            (   AsIs(minorroads_historical_table), \
+                AsIs(windturbines_operational_table), \
+                turbine_fid,\
+                AsIs(MAXIMUM_DISTANCE_ENDPOINT), \
+                AsIs(windturbines_operational_table), \
+                turbine_fid,\
+                AsIs(MAXIMUM_DISTANCE_ENDPOINT), ))
+
+            postgisExec("""
+            DELETE FROM %s minorroad 
+            WHERE 
+            minorroad.highway = 'service' AND
+            ((SELECT MIN(ST_Distance(minorroad.geom, ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)""", \
+            (AsIs(minorroads_historical_table), AsIs(windturbines_operational_table), turbine_fid, AsIs(MAXIMUM_DISTANCE_LINE), ))
+
+    LogMessage("Historical minor roads recreation: COMPLETED")
+
 def downloadWindSpeeds():
     """
     Download wind speed data
@@ -1925,28 +2226,37 @@ def getWindSpeed(position):
     Gets wind speed at specific point
     """
 
-    global WINDSPEED_DATASET
+    global WINDSPEED_DATASET, WINDSPEED_CACHE
 
-    windspeeds = postgisGetResults("SELECT MAX(windspeed) FROM %s WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326))", \
-                                   (AsIs(reformatTableName(WINDSPEED_DATASET)), position['lng'], position['lat'], ))
+    position_index = str(position['lng']) + '_' + str(position['lat'])
 
-    if len(windspeeds) == 0: return None
+    if position_index not in WINDSPEED_CACHE:
 
-    return windspeeds[0][0]
+        results = postgisGetResults("SELECT MAX(windspeed) FROM %s WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326))", \
+                                    (AsIs(reformatTableName(WINDSPEED_DATASET)), position['lng'], position['lat'], ))
+
+        if len(results) == 0: return None
+
+        WINDSPEED_CACHE[position_index] = results[0][0]
+
+    return WINDSPEED_CACHE[position_index]
 
 def importAllWindProjects():
     """
     Imports manually curated list of all failed and successful wind turbine positions
     """
 
-    global WINDTURBINES_ALLPROJECTS_DATASET
-
-    onshore_allprojects_dataset_path = WINDTURBINES_ALLPROJECTS_DATASET + '.geojson'
+    global WINDTURBINES_ALLPROJECTS_URL, DATASETS_FOLDER, WINDTURBINES_ALLPROJECTS_DATASET
+    
+    onshore_allprojects_dataset_path = DATASETS_FOLDER + WINDTURBINES_ALLPROJECTS_DATASET + '.geojson' 
 
     if not isfile(onshore_allprojects_dataset_path):
 
-        LogError("No data file containing all turbine coordinates for failed and successful projects - ABORTING")
-        exit()
+        LogMessage("No data file containing all turbine coordinates for failed and successful projects - initiating download")
+
+        attemptDownloadUntilSuccess(WINDTURBINES_ALLPROJECTS_URL, onshore_allprojects_dataset_path)
+
+        LogMessage("Failed and successful wind turbines downloaded")
 
     if not postgisCheckTableExists(WINDTURBINES_ALLPROJECTS_DATASET): 
         
@@ -2026,8 +2336,9 @@ def getAllLargeWindProjects():
     ST_Y (ST_Transform (geom, 4326)) AS lat, 
     ST_X (geom_27700) AS x,
     ST_Y (geom_27700) AS y 
-    FROM %s ORDER BY project_guid, lng, lat 
+    FROM %s 
     WHERE turbine_tipheight >= %s
+    ORDER BY project_guid, lng, lat 
     """, (AsIs(reformatTableName(WINDTURBINES_ALLPROJECTS_DATASET)), AsIs(WINDTURBINES_MIN_HEIGHTTIP), ))
 
 def getOperationalBeforeDateWithinDistance(radiuspoints, date):
@@ -2036,7 +2347,8 @@ def getOperationalBeforeDateWithinDistance(radiuspoints, date):
     """
 
     if date == '': return None
-
+    if date is None: return None
+    date = str(date)
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_operational'] != None]
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_operational'] < datetime.strptime(date, '%Y-%m-%d').date()]
 
@@ -2048,7 +2360,8 @@ def getApprovedBeforeDateWithinDistance(radiuspoints, date):
     """
 
     if date == '': return None
-
+    if date is None: return None
+    date = str(date)
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_end'] != None]
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_end'] < datetime.strptime(date, '%Y-%m-%d').date()]
     radiuspoints = radiuspoints[radiuspoints['project_status'].isin(['Decommissioned', 'Application Granted', 'Awaiting Construction', 'Under Construction', 'Operational'])]
@@ -2062,7 +2375,8 @@ def getAppliedBeforeDateWithinDistance(radiuspoints, date):
     """
 
     if date == '': return None
-
+    if date is None: return None
+    date = str(date)
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_start'] != None]
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_start'] < datetime.strptime(date, '%Y-%m-%d').date()]
     radiuspoints = radiuspoints[radiuspoints['project_status'].isin(['Application Submitted', 'Appeal Lodged'])]
@@ -2075,7 +2389,8 @@ def getRejectedBeforeDateWithinDistance(radiuspoints, date):
     """
 
     if date == '': return None
-
+    if date is None: return None
+    date = str(date)
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_end'] != None]
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_end'] < datetime.strptime(date, '%Y-%m-%d').date()]
     radiuspoints = radiuspoints[radiuspoints['project_status'].isin(['Application Refused', 'Appeal Refused', 'Appeal Withdrawn'])]
@@ -2102,7 +2417,8 @@ def runRadiusSearch(searchposition, distance, REPD):
 
     initialiseAllLargeWindProjectsDataFrame()
 
-    df_otherprojects = ALLTURBINES_DF.loc[ALLTURBINES_DF['project_guid'] != REPD]
+    if REPD is None: df_otherprojects = ALLTURBINES_DF
+    else: df_otherprojects = ALLTURBINES_DF.loc[ALLTURBINES_DF['project_guid'] != REPD]
 
     gdf = gpd.GeoDataFrame(
         df_otherprojects,
@@ -2282,6 +2598,8 @@ def getPolitical(position, year):
 
     council = convertPosition2Council(position)
 
+    if council is None: return None
+
     political_key = str(year) + '_' + council
 
     if political_key not in POLITICAL_CACHE:
@@ -2336,7 +2654,8 @@ def convertPosition2Geocode(position):
         SELECT geo_code FROM sitepredictor__census_geography__uk WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326))
         """, (position['lng'], position['lat'], ))
 
-        GEOCODE_POSITION_LOOKUP[position_index] = results[0][0]
+        if len(results) == 0: GEOCODE_POSITION_LOOKUP[position_index] = None
+        else: GEOCODE_POSITION_LOOKUP[position_index] = results[0][0]
 
     return GEOCODE_POSITION_LOOKUP[position_index]
 
@@ -2351,11 +2670,14 @@ def convertPosition2Council(position):
 
     if position_index not in COUNCIL_POSITION_LOOKUP:
 
+        # In the event of point being in more than one council, we select smallest council
         results = postgisGetResults("""
-        SELECT name FROM sitepredictor__councils__uk WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326))
+        SELECT name FROM sitepredictor__councils__uk WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) 
+        ORDER BY ST_Area(ST_Transform(geom, 27700)) ASC
         """, (position['lng'], position['lat'], ))
 
-        COUNCIL_POSITION_LOOKUP[position_index] = [result[0] for result in results]
+        if len(results) == 0: COUNCIL_POSITION_LOOKUP[position_index] = None
+        else: COUNCIL_POSITION_LOOKUP[position_index] = results[0][0]
 
     return COUNCIL_POSITION_LOOKUP[position_index]
 
@@ -2386,30 +2708,55 @@ def populateLookupsWithAllTurbines():
 
     LogMessage("Finished populating lookup tables")
 
-def populateLookupsWithSamplingGrid():
+def populateLookupsWithSamplingGrid(batch_index, batch_grid_spacing):
     """
-    Populates Geocode and council lookup with all sampling grid positions
+    Populates Geocode and council lookup and windspeed cache with all sampling grid positions
     """
 
-    global GEOCODE_POSITION_LOOKUP, COUNCIL_POSITION_LOOKUP, SAMPLING_GRID
+    global GEOCODE_POSITION_LOOKUP, COUNCIL_POSITION_LOOKUP, SAMPLING_GRID, WINDSPEED_DATASET, WINDSPEED_CACHE
+
+    sampling_grid_to_use = SAMPLING_GRID
+    if batch_index is not None: sampling_grid_to_use = buildBatchSamplingGridTableName(batch_index, batch_grid_spacing)
 
     LogMessage("Populating lookup tables with all sampling positions...")
+
+    LogMessage("Populating lookup tables with census areas")
 
     results = postgisGetResultsAsDict("""
     SELECT ST_X(turbine.geom) lng, ST_Y(turbine.geom) lat, area.geo_code geocode
     FROM %s turbine, sitepredictor__census_geography__uk area 
-    WHERE ST_Intersects(turbine.geom, area.geom);""", (AsIs(SAMPLING_GRID), ))
+    WHERE ST_Intersects(turbine.geom, area.geom);""", (AsIs(sampling_grid_to_use), ))
 
     for result in results:
         GEOCODE_POSITION_LOOKUP[str(result['lng']) + '_' + str(result['lat'])] = result['geocode']
 
+    LogMessage("Populating lookup tables with council areas")
+
+    if not postgisCheckColumnExists('sitepredictor__councils__uk', 'size'):
+
+        LogMessage("Creating 'size' column on sitepredictor__councils__uk to reduce query time")
+
+        postgisExec("ALTER TABLE sitepredictor__councils__uk ADD size INT;")
+        postgisExec("UPDATE sitepredictor__councils__uk SET size = (ST_Area(ST_Transform(geom, 27700))/1000000);")
+        postgisExec("CREATE INDEX ON sitepredictor__councils__uk (size);")
+
     results = postgisGetResultsAsDict("""
     SELECT ST_X(turbine.geom) lng, ST_Y(turbine.geom) lat, area.name council
     FROM %s turbine, sitepredictor__councils__uk area 
-    WHERE ST_Intersects(turbine.geom, area.geom);""", (AsIs(SAMPLING_GRID), ))
+    WHERE ST_Intersects(turbine.geom, area.geom) ORDER BY area.size DESC;""", (AsIs(sampling_grid_to_use), ))
 
     for result in results:
         COUNCIL_POSITION_LOOKUP[str(result['lng']) + '_' + str(result['lat'])] = result['council']
+
+    LogMessage("Populating lookup tables with windspeeds")
+
+    results = postgisGetResultsAsDict("""
+    SELECT ST_X(turbine.geom) lng, ST_Y(turbine.geom) lat, windspeed.windspeed
+    FROM %s turbine, %s windspeed 
+    WHERE ST_Intersects(turbine.geom, windspeed.geom) ORDER BY windspeed;""", (AsIs(sampling_grid_to_use), AsIs(reformatTableName(WINDSPEED_DATASET)), ))
+
+    for result in results:
+        WINDSPEED_CACHE[str(result['lng']) + '_' + str(result['lat'])] = result['windspeed']
 
     LogMessage("Finished populating lookup tables")
 
@@ -2421,6 +2768,8 @@ def getSpecificCensusSingleGeography(position, category):
     global CENSUS_CACHE
 
     geocode = convertPosition2Geocode(position)
+
+    if geocode is None: return None
 
     # Attempt to retrieve data from memory cache
 
@@ -2572,6 +2921,7 @@ def getCensus(position, radius=None, year='2011'):
     for category in categories:
         if radius is None: census_data = getSpecificCensusSingleGeography(position, category)
         else: census_data = getSpecificCensusSearchRadius(position, category, radius)
+        if census_data is None: return None
         for data_field in census_data.keys():
             # Non-proportional values are unlikely to be useful unless in special cases, ie. mean, median, total
             if  ('mean' not in data_field) and \
@@ -2590,6 +2940,7 @@ def getCountry(position):
 
     geocode = convertPosition2Geocode(position)
 
+    if geocode is None: return None
     if geocode.startswith("E"): return 'England'
     if geocode.startswith("W"): return 'Wales'
     if geocode.startswith("S"): return 'Scotland'
@@ -2812,16 +3163,39 @@ def createDistanceCache(tables):
             cache.distance = 0 AND cache.table_name = %s;
             """, (AsIs(DISTANCE_CACHE_TABLE), AsIs(table), table, ))
 
-def createSamplingGrid():
+def createSamplingGrid(batch_index, batch_grid_spacing):
     """
     Creates sampling grid for use in building final result maps
     """
 
     global RASTER_RESOLUTION, SAMPLING_GRID
 
-    if not postgisCheckTableExists(SAMPLING_GRID):
+    if (batch_index is not None) and (batch_grid_spacing is not None):
 
-        LogMessage("Creating sampling grid with points spaced at " + str(RASTER_RESOLUTION) + " metres")
+        batch_sampling_grid = buildBatchSamplingGridTableName(batch_index, batch_grid_spacing)
+        batch_grid_table = buildBatchGridTableName(batch_index, batch_grid_spacing)
+
+        if not postgisCheckTableExists(batch_grid_table):
+
+            LogMessage("Creating batch processing grid overlay to allow concurrent processing on separate machines")
+
+            postgisExec("CREATE TABLE %s AS SELECT (ST_SquareGrid(%s, ST_Transform(geom, 27700))).geom geom FROM overall_clipping__union;", 
+                        (AsIs(batch_grid_table), AsIs(batch_grid_spacing), ))
+            postgisExec("ALTER TABLE %s ADD COLUMN temp_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY", (AsIs(batch_grid_table), ))
+            postgisExec("DELETE FROM %s WHERE temp_id IN (SELECT grid.temp_id FROM %s grid, overall_clipping__union clipping WHERE ST_Intersects(ST_Transform(grid.geom, 4326), clipping.geom) IS FALSE);", \
+                        (AsIs(batch_grid_table), AsIs(batch_grid_table), ))
+            postgisExec("ALTER TABLE %s DROP COLUMN temp_id", (AsIs(batch_grid_table), ))
+            postgisExec("ALTER TABLE %s ADD COLUMN id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY", (AsIs(batch_grid_table), ))
+            postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(batch_grid_table + "_idx"), AsIs(batch_grid_table), ))
+
+        number_batches = postgisGetResults("SELECT COUNT(*) FROM %s;", (AsIs(batch_grid_table), ))
+        number_batches = number_batches[0][0]
+
+        LogMessage("Total number of batches: " + str(number_batches))
+
+        if postgisCheckTableExists(batch_sampling_grid): postgisDropTable(batch_sampling_grid)
+
+        LogMessage("Creating batch sampling grid for batch " + str(batch_index) + "/" + str(number_batches) + " with points spaced at " + str(RASTER_RESOLUTION) + " metres")
 
         # Note: It's important RASTER_RESOLUTION is float when sent to ST_AsRaster 
         # otherwise interpreted as number of rows/columns rather than size of rows/columns
@@ -2835,18 +3209,54 @@ def createSamplingGrid():
                 samplepoints.samplepoint geom
             FROM
             (
-                SELECT (ST_PixelAsCentroids(ST_AsRaster(ST_Transform(geom, 27700), %s, %s))).geom samplepoint FROM overall_clipping__union
+                SELECT ST_Transform((ST_PixelAsCentroids(ST_AsRaster(ST_Transform(geom, 27700), %s, %s))).geom, 4326) samplepoint FROM %s WHERE id = %s
             ) samplepoints 
         );
-        """, (AsIs(SAMPLING_GRID), AsIs(float(RASTER_RESOLUTION)), AsIs(float(RASTER_RESOLUTION)), ))
-        postgisExec("ALTER TABLE %s ADD COLUMN id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY;", (AsIs(SAMPLING_GRID), ))
+        """, (AsIs(batch_sampling_grid), AsIs(float(RASTER_RESOLUTION)), AsIs(float(RASTER_RESOLUTION)), AsIs(batch_grid_table), AsIs(batch_index), ))
+
+        postgisExec("ALTER TABLE %s ADD COLUMN temp_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY", (AsIs(batch_sampling_grid), ))
+        postgisExec("DELETE FROM %s WHERE temp_id IN (SELECT grid.temp_id FROM %s grid, overall_clipping__union clipping WHERE ST_Intersects(grid.geom, clipping.geom) IS FALSE);", \
+                    (AsIs(batch_sampling_grid), AsIs(batch_sampling_grid), ))
+        postgisExec("ALTER TABLE %s DROP COLUMN temp_id", (AsIs(batch_sampling_grid), ))
+        postgisExec("ALTER TABLE %s ADD COLUMN id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY;", (AsIs(batch_sampling_grid), ))
+
+    else:
+        if not postgisCheckTableExists(SAMPLING_GRID):
+
+            LogMessage("Creating sampling grid with points spaced at " + str(RASTER_RESOLUTION) + " metres")
+
+            # Note: It's important RASTER_RESOLUTION is float when sent to ST_AsRaster 
+            # otherwise interpreted as number of rows/columns rather than size of rows/columns
+            #  
+            postgisExec("""
+            CREATE TABLE %s AS
+            (
+                SELECT 
+                    ST_X(ST_Transform(samplepoints.samplepoint, 27700)) easting,
+                    ST_Y(ST_Transform(samplepoints.samplepoint, 27700)) northing,
+                    samplepoints.samplepoint geom
+                FROM
+                (
+                    SELECT ST_Transform((ST_PixelAsCentroids(ST_AsRaster(ST_Transform(geom, 27700), %s, %s))).geom, 4326) samplepoint FROM overall_clipping__union
+                ) samplepoints 
+            );
+            """, (AsIs(SAMPLING_GRID), AsIs(float(RASTER_RESOLUTION)), AsIs(float(RASTER_RESOLUTION)), ))
+            postgisExec("ALTER TABLE %s ADD COLUMN id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY;", (AsIs(SAMPLING_GRID), ))
 
 def runAdditionalDownloads():
     """
     Carry out any additional downloads
     """
 
-    global ADDITIONAL_DOWNLOADS, DATASETS_FOLDER, LOCALAUTHORITY_CONVERSIONS
+    global CENSUS_2011_ZIP_URL, ADDITIONAL_DOWNLOADS, DATASETS_FOLDER, LOCALAUTHORITY_CONVERSIONS
+    
+    LogMessage("Downloading and extracting 2011 census data...")
+
+    census_2011_zip = 'census_2011.zip'
+    attemptDownloadUntilSuccess(CENSUS_2011_ZIP_URL, census_2011_zip)
+    with ZipFile(census_2011_zip, 'r') as zip_ref: zip_ref.extractall(DATASETS_FOLDER)
+
+    LogMessage("2011 census data downloaded and extracted")
 
     possible_extensions_unzipped = ['shp', 'geojson', 'gpkg']
     for additional_download in ADDITIONAL_DOWNLOADS:
@@ -2896,7 +3306,7 @@ def runAdditionalDownloads():
         postgisExec('UPDATE sitepredictor__political__uk SET area = %s WHERE area = %s', (conversion_to, conversion_from, ))
         postgisExec('DELETE FROM sitepredictor__councils__uk WHERE name = %s', (conversion_from, ))
 
-def createDistanceRasters(tables):
+def createDistanceRasters(tables, batch_index, batch_grid_spacing):
     """
     Creates distance rasters for tables
     """
@@ -2907,12 +3317,18 @@ def createDistanceRasters(tables):
 
         feature_raster = RASTER_OUTPUT_FOLDER + table + '.tif'
         distance_raster = getDistanceRasterPath(table)
-        
-        if not isfile(distance_raster): 
+        rebuild_raster = False
+
+        if batch_index is None: 
+            if not isfile(distance_raster): rebuild_raster = True
+        else:
+            batch_distance_raster = buildBatchRasterFilename(distance_raster, batch_index, batch_grid_spacing)
+            if not isfile(batch_distance_raster): rebuild_raster = True
+
+        if rebuild_raster: 
             if isfile(feature_raster): os.remove(feature_raster)
             createFeaturesRaster(table, feature_raster)
-            createDistanceRaster(feature_raster, distance_raster)
-            # os.remove(feature_raster)
+            createDistanceRaster(feature_raster, distance_raster, batch_index, batch_grid_spacing)
 
 def createSpacedGrid(position_start, spacing_metres, num_rows, num_cols):
     """
@@ -2933,21 +3349,100 @@ def createSpacedGrid(position_start, spacing_metres, num_rows, num_cols):
 
     return spaced_grid
 
-def getSampleGrid():
+def getSampleGrid(batch_index, batch_grid_spacing):
     """
     Gets entire sample grid as array
     """
 
     global SAMPLING_GRID
 
-    return postgisGetResultsAsDict("SELECT easting, northing, ST_X(geom) lng, ST_Y(geom) lat FROM %s ORDER BY easting, northing;", (AsIs(SAMPLING_GRID), ))
+    if batch_index is None:
+        return postgisGetResultsAsDict("SELECT easting, northing, ST_X(geom) lng, ST_Y(geom) lat FROM %s ORDER BY easting, northing;", (AsIs(SAMPLING_GRID), ))
+    else:
+        batch_sampling_grid = buildBatchSamplingGridTableName(batch_index, batch_grid_spacing)
+        return postgisGetResultsAsDict("SELECT easting, northing, ST_X(geom) lng, ST_Y(geom) lat FROM %s ORDER BY easting, northing;", (AsIs(batch_sampling_grid), ))
 
-def createSamplingGridData():
+def createTestSamplingGrid(position):
+    """
+    Creates test sampling grid of size TEST_SAMPLING_GRID_SIZE metres that contains position
+    """
+
+    global TEST_SAMPLING_GRID_SIZE, OVERALL_CLIPPING_FILE, RASTER_RESOLUTION, SAMPLING_GRID
+
+    test_sampling_grid_gridsquare_table = 'sitepredictor__test_sampling_grid__gridsquare'
+    test_sampling_grid_gridsquare_union_table = 'sitepredictor__test_sampling_grid__gridsquare__union'
+    clipping_table = reformatTableName(OVERALL_CLIPPING_FILE)
+    clipping_union_table = buildUnionTableName(clipping_table)
+
+    postgisExec("DROP TABLE %s;", (AsIs(test_sampling_grid_gridsquare_table), ))
+    postgisExec("DROP TABLE %s;", (AsIs(test_sampling_grid_gridsquare_union_table), ))
+    postgisExec("DROP TABLE %s;", (AsIs(SAMPLING_GRID), ))
+
+    LogMessage("Creating test sampling grid with size " + str(TEST_SAMPLING_GRID_SIZE) + " metres")
+
+    postgisExec("CREATE TABLE %s AS SELECT ST_Transform((ST_SquareGrid(%s, ST_Transform(geom, 27700))).geom, 4326) geom FROM %s;", 
+                (AsIs(test_sampling_grid_gridsquare_table), AsIs(TEST_SAMPLING_GRID_SIZE), AsIs(clipping_union_table), ))
+        
+    LogMessage("Removing any grid squares not containing point [" + str(position['lng']) + "," + str(position['lat']) + "]")
+
+    postgisExec("DELETE FROM %s WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) = FALSE", (AsIs(test_sampling_grid_gridsquare_table), position['lng'], position['lat'], ))
+
+    LogMessage("Dissolving remaining grid squares in test sampling grid")
+
+    postgisExec("CREATE TABLE %s AS SELECT ST_Union(geom) geom FROM %s", (AsIs(test_sampling_grid_gridsquare_union_table), AsIs(test_sampling_grid_gridsquare_table), ))
+
+    LogMessage("Filling test sampling grid with points spaced at " + str(RASTER_RESOLUTION) + " metres")
+
+    # Note: It's important RASTER_RESOLUTION is float when sent to ST_AsRaster 
+    # otherwise interpreted as number of rows/columns rather than size of rows/columns
+    #  
+    postgisExec("""
+    CREATE TABLE %s AS
+    (
+        SELECT 
+            ST_X(ST_Transform(samplepoints.samplepoint, 27700)) easting,
+            ST_Y(ST_Transform(samplepoints.samplepoint, 27700)) northing,
+            samplepoints.samplepoint geom
+        FROM
+        (
+            SELECT ST_Transform((ST_PixelAsCentroids(ST_AsRaster(ST_Transform(geom, 27700), %s, %s))).geom, 4326) samplepoint FROM %s
+        ) samplepoints 
+    );
+    """, (AsIs(SAMPLING_GRID), AsIs(float(RASTER_RESOLUTION)), AsIs(float(RASTER_RESOLUTION)), AsIs(test_sampling_grid_gridsquare_union_table), ))
+    postgisExec("ALTER TABLE %s ADD COLUMN id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY;", (AsIs(SAMPLING_GRID), ))
+
+
+def createSamplingGridData(batch_index, batch_grid_spacing):
     """
     Generates sampling grid data, ie. same features created for all failed/successful wind turbines but for all sampling grid points
     """
 
     global RASTER_RESOLUTION, OUTPUT_DATA_SAMPLEGRID
+
+
+    # ************************************************************
+    # ******************* CREATE SAMPLING GRID *******************
+    # ************************************************************
+    #
+    # * Use below to test on single small grid square covering specific point *
+    # ------------------------------------------------------------
+    # point = {'lng': 0, 'lat': 51}
+    # createTestSamplingGrid(point)
+    # ------------------------------------------------------------
+    #
+    # Default, below, is to create sampling grid for whole of UK
+    # If batch_index/batch_grid_spacing are set:
+    # - Cut up UK into grid squares spaced at batch_grid_spacing metres
+    # - Select grid square with index 'batch_index'
+    createSamplingGrid(batch_index, batch_grid_spacing)
+
+
+    # ************************************************************
+    # ***************** CREATE DISTANCE RASTERS ******************
+    # ************************************************************
+
+    # Create distance rasters to improve performance 
+    # - faster than querying PostGIS for every position
 
     # Get list of tables to run distance testing on    
     tables_to_test_unprojected = removeNonEssentialTablesForDistance(postgisGetUKBasicProcessedTables())
@@ -2959,79 +3454,105 @@ def createSamplingGridData():
 
     tables_to_test = removeNonEssentialTablesForDistance(tables_to_test)
 
-    createDistanceRasters(tables_to_test)
+    createDistanceRasters(tables_to_test, batch_index, batch_grid_spacing)
+
+    # ************************************************************
+    # ********* LOAD SAMPLED POINTS AND START PROCESSING *********
+    # ************************************************************
 
     LogMessage("Retrieving all points from sample grid with spacing: " + str(RASTER_RESOLUTION) + " metres")
 
-    # sample_grid = getSampleGrid()
+    sample_grid = getSampleGrid(batch_index, batch_grid_spacing)
+    
+    LogMessage("Number of points in sample grid: " + str(len(sample_grid)))
 
-    test_start = {'lng': 0, 'lat': 51}
-    sample_grid = createSpacedGrid(test_start, RASTER_RESOLUTION, 100, 100)
-
-    for point in sample_grid:
-        sample_grid['easting'], sample_grid['northing'] = lnglat_to_bngrs(point['lng'], point['lat'])
-        
     index, features = 0, []
-    # distance_ranges = [20]
     distance_ranges = [10, 20, 30, 40]
+    output_data = buildBatchGridOutputData(OUTPUT_DATA_SAMPLEGRID, batch_index, batch_grid_spacing)
 
     distances = []
     for index in range(len(sample_grid)): distances.append({})
 
-    LogMessage("Building array of distances from distance rasters for all points and all rasters...")
+    # With batching, we add distances one layer at a time after main processing has completed
+    # Without batching, we create inmemory array of all distances, below
+    
+    if batch_index is None:
 
-    for table in tables_to_test:
-        distance_raster = getDistanceRasterPath(table)
-        raster = rasterio.open(distance_raster)
-        table_name_for_output = table.replace('__pro__27700', '')
+        LogMessage("Building array of distances from distance rasters for all points and all rasters...")
 
-        for index in range(len(sample_grid)):
-            metric_point = (sample_grid[index]['easting'], sample_grid[index]['northing'])
-            iterator = raster.sample([metric_point])
-            for iterator_item in iterator: distance = iterator_item[0] 
-            distances[index]['distance__' + table_name_for_output] = float(distance)
+        for table in tables_to_test:
+            LogMessage("Getting distances for: " + table)
+            distance_raster = getDistanceRasterPath(table)
+            raster = rasterio.open(distance_raster)
+            table_name_for_output = table.replace('__pro__27700', '')
 
-        raster.close()
+            for index in range(len(sample_grid)):
+                metric_point = (sample_grid[index]['easting'], sample_grid[index]['northing'])
+                iterator = raster.sample([metric_point])
+                for iterator_item in iterator: distance = iterator_item[0] 
+                distances[index]['distance__' + table_name_for_output] = float(distance)
 
-    LogMessage("Finished building array of distances")
+            raster.close()
+
+        LogMessage("Finished building array of distances")
 
     index, firstrowwritten, totalrecords, fieldnames = 0, False, len(sample_grid), None
 
-    if isfile(OUTPUT_DATA_SAMPLEGRID): os.remove(OUTPUT_DATA_SAMPLEGRID)
+    if isfile(output_data): os.remove(output_data)
 
     # Populate Geocode lookup to save time
-    # populateLookupsWithSamplingGrid()
+    populateLookupsWithSamplingGrid(batch_index, batch_grid_spacing)
 
     for index in range(len(sample_grid)):
         turbine = {}
 
-        LogMessage("Processing hypothetical turbine position: " + str(index + 1) + "/" + str(totalrecords))
+        # if index < 514705: continue
 
-        turbine['project_date_end'] = None
+        # print(index)
+
+        if index % 100 == 0:
+            LogMessage("Processing hypothetical turbine position: " + str(index + 1) + "/" + str(totalrecords))
+
+        turbine['project_date_end'] = datetime.today().strftime('%Y-%m-%d')
         turbine['project_date_operational'] = None
         turbine['project_date_underconstruction'] = None
         turbine['project_date_start'] = datetime.today().strftime('%Y-%m-%d')
         turbine['project_year'] = datetime.today().strftime('%Y')
 
         # Improve ordering of fields
+
+        LogStage("Step 1")
+
         turbine_lnglat = {'lng': sample_grid[index]['lng'], 'lat': sample_grid[index]['lat']}
-        turbine_xy = {'x': turbine['easting'], 'y': turbine['northing']}
+        turbine_xy = {'x': sample_grid[index]['easting'], 'y': sample_grid[index]['northing']}
         turbine['turbine_country'] = getCountry(turbine_lnglat)
+        if turbine['turbine_country'] is None: 
+            LogMessage("No country found for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
+            continue
+
+        LogStage("Step 2")
+
         turbine['turbine_elevation'] = getElevation(turbine_lnglat)[0]
+
+        LogStage("Step 3")
+
         turbine['turbine_grid_coordinates_srs'] = 'EPSG:27700'
         turbine['turbine_grid_coordinates_easting'] = sample_grid[index]['easting']
         turbine['turbine_grid_coordinates_northing'] = sample_grid[index]['northing']
-        turbine['turbine_lnglat_lng'] = turbine['lng']
-        turbine['turbine_lnglat_lat'] = turbine['lat']
-        del turbine['lng']
-        del turbine['lat']
-        del turbine['easting']
-        del turbine['northing']
-
+        turbine['turbine_lnglat_lng'] = turbine_lnglat['lng']
+        turbine['turbine_lnglat_lat'] = turbine_lnglat['lat']
         turbine['windspeed'] = getWindSpeed(turbine_lnglat)
         turbine['project_size'] = 1
 
+        LogStage("Step 4")
+
         census = getCensus(turbine_lnglat)
+        if census is None:
+            LogMessage("No census data for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
+            continue
+
+        LogStage("Step 5")
+
         for census_key in census.keys(): turbine[census_key] = census[census_key]
 
         political = {
@@ -3051,51 +3572,91 @@ def createSamplingGridData():
         year = str(int(datetime.today().strftime('%Y')) - 1)
         political = getPolitical(turbine_lnglat, year)
 
+        if political is None:
+            LogMessage("No political data for point: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']) + " so skipping")
+            continue
+
+        LogStage("Step 6")
+
         for political_key in political.keys(): turbine[political_key] = political[political_key]
 
         for distance_range in distance_ranges:
-            radiuspoints                                                        = runRadiusSearch(turbine_xy, 1000 * distance_range, turbine['project_guid'])
-            turbine['count__operational_within_' + str(distance_range)+'km']    = getOperationalBeforeDateWithinDistance(radiuspoints, turbine['project_date_start'])
-            turbine['count__approved_within_' + str(distance_range)+'km']       = getApprovedBeforeDateWithinDistance(radiuspoints, turbine['project_date_start'])
-            turbine['count__applied_within_' + str(distance_range)+'km']        = getAppliedBeforeDateWithinDistance(radiuspoints, turbine['project_date_start'])
-            turbine['count__rejected_within_' + str(distance_range)+'km']       = getRejectedBeforeDateWithinDistance(radiuspoints, turbine['project_date_start'])
+            radiuspoints                                                        = runRadiusSearch(turbine_xy, 1000 * distance_range, None)
+            turbine['count__operational_within_' + str(distance_range)+'km']    = getOperationalBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+            turbine['count__approved_within_' + str(distance_range)+'km']       = getApprovedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+            turbine['count__applied_within_' + str(distance_range)+'km']        = getAppliedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+            turbine['count__rejected_within_' + str(distance_range)+'km']       = getRejectedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
 
-        for distance_key in distances[index].keys(): turbine[distance_key] = distances[index][distance_key]
+        LogStage("Step 7")
+
+        if batch_index is None:
+            for distance_key in distances[index].keys(): turbine[distance_key] = distances[index][distance_key]
 
         if not firstrowwritten:
-            with open(OUTPUT_DATA_SAMPLEGRID, 'w', newline='') as csvfile:
+            with open(output_data, 'w', newline='') as csvfile:
                 fieldnames = turbine.keys()
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
             firstrowwritten = True
 
-        with open(OUTPUT_DATA_SAMPLEGRID, 'a', newline='') as csvfile:
+        with open(output_data, 'a', newline='') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writerow(turbine)
 
         index += 1
 
-    # for index in range(len(metric_sample_grid)):
-    #     grid_point = sample_grid[index]
-    #     features.append({
-    #         'type': 'Feature',
-    #         'properties': distances[index],
-    #         'geometry': {
-    #             'type': 'Point',
-    #             'coordinates': [
-    #                 grid_point['lng'], 
-    #                 grid_point['lat']
-    #             ]
-    #         }
-    #     })
+    # For batched processing, add distances from batch rasters to turbine positions after finishing main processing
 
-    # featurecollection = {
-    #     'type': 'FeatureCollection', 
-    #     'features': features
-    # }
+    if batch_index is not None:
 
-    # with open('samplegrid.geojson', "w", encoding='UTF-8') as writerfileobj:
-    #     json.dump(featurecollection, writerfileobj, ensure_ascii=False, indent=4)
+        for table in tables_to_test:
+            table_name_for_output = table.replace('__pro__27700', '')
+            distance_column = 'distance__' + table_name_for_output
+
+            turbines, firstrowwritten = [], False
+            with open(output_data, 'r', newline='', encoding="utf-8") as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader: turbines.append(row)
+
+            if distance_column in turbines[0]: 
+                LogMessage("Turbine output data already has distances for: " + table_name_for_output)
+                continue
+
+            LogMessage("Getting distances from distance raster for: " + table)
+
+            distance_raster = getDistanceRasterPath(table)
+            batch_distance_raster = buildBatchRasterFilename(distance_raster, batch_index, batch_grid_spacing)
+            raster = rasterio.open(batch_distance_raster)
+
+            # Output results to temporary file and only copy over once processing has completed
+            temp_data = 'temp.csv'
+            if isfile(temp_data): os.remove(temp_data)
+
+            for turbine in turbines:
+                metric_point = (turbine['turbine_grid_coordinates_easting'], turbine['turbine_grid_coordinates_northing'])
+                iterator = raster.sample([metric_point])
+                for iterator_item in iterator: distance = iterator_item[0] 
+                turbine[distance_column] = float(distance)
+
+                if not firstrowwritten:
+                    with open(temp_data, 'w', newline='') as csvfile:
+                        fieldnames = turbine.keys()
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writeheader()
+                    firstrowwritten = True
+
+                with open(temp_data, 'a', newline='') as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writerow(turbine)
+
+            raster.close()
+            shutil.copy(temp_data, output_data)
+
+    if (batch_index is not None) and (batch_grid_spacing is not None):
+        batch_sampling_grid = buildBatchSamplingGridTableName(batch_index, batch_grid_spacing)
+        if postgisCheckTableExists(batch_sampling_grid): 
+            LogMessage("Dropping batch sampling grid table: " + batch_sampling_grid)
+            postgisDropTable(batch_sampling_grid)
 
 def createAllTurbinesData():
     """
@@ -3133,20 +3694,19 @@ def createAllTurbinesData():
     for table in tables_to_test_unprojected:
         tables_to_test.append(createTransformedTable(table))
 
-    tables_to_test = removeNonEssentialTablesForDistance(tables_to_test)
-
     # Generate historical footpaths to account for turbine-created footpaths creating misleading data
     generateHistoricalFootpaths()
+
+    # Generate historical minor roads to account for turbine-created service roads creating misleading data
+    generateHistoricalMinorRoads()
+
+    tables_to_test = removeNonEssentialTablesForDistance(tables_to_test)
 
     # Create distance-to-turbine cache
     createDistanceCache(tables_to_test)
 
-    # Create sampling grid, ie. grid of spaced points, that will be used to generate final map from ML
-    createSamplingGrid()
-
     if isfile(OUTPUT_DATA_ALLTURBINES): os.remove(OUTPUT_DATA_ALLTURBINES)
 
-    index, firstrowwritten, totalrecords, fieldnames = 0, False, len(all_turbines), None
     # distance_ranges = [20]
     distance_ranges = [10, 20, 30, 40]
 
@@ -3156,6 +3716,7 @@ def createAllTurbinesData():
     # Get all large failed and successful wind turbines and iterate through them
 
     all_turbines = getAllLargeWindProjects()
+    index, firstrowwritten, totalrecords, fieldnames = 0, False, len(all_turbines), None
 
     for turbine in all_turbines:
 
@@ -3168,7 +3729,7 @@ def createAllTurbinesData():
         if turbine['project_date_underconstruction'] is not None:
             turbine['project_date_underconstruction'] = turbine['project_date_underconstruction'].strftime('%Y-%m-%d')
         if turbine['project_date_start'] is None: turbine['project_year'] = None
-        else: turbine['project_year'] = turbine['project_date_start'][0:4]
+        else: turbine['project_year'] = str(turbine['project_date_start'])[0:4]
 
         # Improve ordering of fields
         turbine_lnglat = {'lng': turbine['lng'], 'lat': turbine['lat']}
@@ -3188,6 +3749,7 @@ def createAllTurbinesData():
         del turbine['turbine_easting']
         del turbine['turbine_northing']
         del turbine['geom']
+        del turbine['geom_27700']
 
         turbine['windspeed'] = getWindSpeed(turbine_lnglat)
         turbine['project_size'] = getProjectSize(turbine['project_guid'])
@@ -3231,7 +3793,7 @@ def createAllTurbinesData():
         # project_date_end represents last date of all planning applications attached to project (or if null, is project_date_operational if available)
 
         if (turbine['project_date_end'] is not None) and (turbine['project_date_end'] != ''):
-            year = turbine['project_date_end'][0:4]
+            year = str(turbine['project_date_end'])[0:4]
             political = getPolitical(turbine_lnglat, year)
         else:
             LogMessage("No project_date_end for: " + turbine['project_guid'] + ', ' + str(turbine['ogc_fid']))
@@ -3240,10 +3802,10 @@ def createAllTurbinesData():
 
         for distance_range in distance_ranges:
             radiuspoints                                                        = runRadiusSearch(turbine_xy, 1000 * distance_range, turbine['project_guid'])
-            turbine['count__operational_within_' + str(distance_range)+'km']    = getOperationalBeforeDateWithinDistance(radiuspoints, turbine['project_date_start'])
-            turbine['count__approved_within_' + str(distance_range)+'km']       = getApprovedBeforeDateWithinDistance(radiuspoints, turbine['project_date_start'])
-            turbine['count__applied_within_' + str(distance_range)+'km']        = getAppliedBeforeDateWithinDistance(radiuspoints, turbine['project_date_start'])
-            turbine['count__rejected_within_' + str(distance_range)+'km']       = getRejectedBeforeDateWithinDistance(radiuspoints, turbine['project_date_start'])
+            turbine['count__operational_within_' + str(distance_range)+'km']    = getOperationalBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+            turbine['count__approved_within_' + str(distance_range)+'km']       = getApprovedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+            turbine['count__applied_within_' + str(distance_range)+'km']        = getAppliedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+            turbine['count__rejected_within_' + str(distance_range)+'km']       = getRejectedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
 
         for table_to_test in tables_to_test:
             distance = postgisDistanceToNearestFeature(turbine['ogc_fid'], table_to_test)
@@ -3268,7 +3830,7 @@ def createAllTurbinesData():
 
         index += 1
 
-def runSitePredictor():
+def runSitePredictor(batch_index, batch_grid_spacing):
     """
     Runs entire site predictor application
     """
@@ -3283,19 +3845,19 @@ def runSitePredictor():
 
     createAllTurbinesData()
 
-    # Populates sampling grid (spaced at RASTER_RESOLUTION metres) with same
-    # features data - where possible - as all turbines, above. 
-    # Year used is (CURRENTYEAR - 1), ie. attempting to predict probability-of-success for now
-
-    # createSamplingGridData()
-
     # Build machine learning model using failed/successful wind turbine features
 
     # machinelearningBuildModel()
 
+    # Populates sampling grid (spaced at RASTER_RESOLUTION metres) with same
+    # features data - where possible - as all turbines, above. 
+    # Year used is (CURRENTYEAR - 1), ie. attempting to predict probability-of-success for now
+
+    # createSamplingGridData(batch_index, batch_grid_spacing)
+
     # Run machine learning model on sampling grid
 
-    # machinelearningRunModelOnSamplingGrid()
+    # machinelearningRunModelOnSamplingGrid(batch_index, batch_grid_spacing)
 
 # ***********************************************************
 # ***********************************************************
@@ -3303,5 +3865,15 @@ def runSitePredictor():
 # ***********************************************************
 # ***********************************************************
 
-runSitePredictor()
+# batch_index indicates specific batch to process - for multi-server processing
+batch_index, batch_grid_spacing = None, None
+
+if len(sys.argv) > 1:
+    if len(sys.argv) < 3:
+        LogMessage("batch processing requires: [batch index] [batch grid spacing in metres]")
+        exit()
+    batch_index, batch_grid_spacing = sys.argv[1], sys.argv[2]
+    LogMessage("Running batch processing with batch_index = " + str(batch_index) + " and batch_grid_spacing = " + str(batch_grid_spacing))
+
+runSitePredictor(batch_index, batch_grid_spacing)
 
