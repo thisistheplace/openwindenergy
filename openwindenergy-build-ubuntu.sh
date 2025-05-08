@@ -81,8 +81,7 @@ echo '********* STAGE 2: Installing Apache2 **********' >> /usr/src/openwindener
 mkdir /var/www
 mkdir /var/www/html
 echo '<!doctype html><html><head><meta http-equiv="refresh" content="2"></head><body><pre>Beginning installation of Open Wind Energy...</pre></body></html>' | sudo tee /var/www/html/index.html
-sudo apt install apache2 libapache2-mod-wsgi-py3 libapache2-mod-perl2 cpanminus -y
-sudo cpanm Authen::Simple::HTTP -y
+sudo apt install apache2 libapache2-mod-wsgi-py3 -y
 sudo a2enmod headers
 sudo a2enmod proxy_http
 sudo a2enmod rewrite
@@ -121,6 +120,7 @@ pip install python-dotenv | tee -a /usr/src/openwindenergy/log.txt
 pip install psycopg2-binary | tee -a /usr/src/openwindenergy/log.txt
 pip install Jinja2 | tee -a /usr/src/openwindenergy/log.txt
 pip install flask | tee -a /usr/src/openwindenergy/log.txt
+pip install validators | tee -a /usr/src/openwindenergy/log.txt
 cp /usr/src/openwindenergy/.env-template /usr/src/openwindenergy/.env
 echo 'SERVER_BUILD=True' >> /usr/src/openwindenergy/.env
 mkdir /usr/src/openwindenergy/build-cli
@@ -129,9 +129,7 @@ mkdir /usr/src/openwindenergy/build-cli/tileserver
 git clone https://github.com/open-wind/openmaptiles-fonts.git
 mv openmaptiles-fonts/fonts /usr/src/openwindenergy/build-cli/tileserver/fonts
 echo "./openwindenergy-build-ubuntu.sh" >> /usr/src/openwindenergy/PROCESSING
-sudo chown -R www-data:www-data /usr/src/openwindenergy/admin
-sudo chown -R www-data:www-data /usr/src/openwindenergy/build-cli
-sudo chown www-data:www-data /usr/src/openwindenergy/.env
+sudo chown -R www-data:www-data /usr/src/openwindenergy
 
 echo "
 # Hostname of PostGIS database server to use.
