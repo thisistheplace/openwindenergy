@@ -516,7 +516,7 @@ We are grateful to the following individuals/organisations for their invaluable 
 - Ben Cannell, [Sharenergy](https://sharenergy.coop)
 - [Clive Howard](https://www.linkedin.com/in/clivehoward/)
 - John Taylor, [Community Energy England](https://communityenergyengland.org/)
-- Mike Childs, Magnus Gallie, Toby Bridgeman, [Friends of the Earth](https://foe.org/)
+- Mike Childs, Magnus Gallie, Toby Bridgeman, [Friends of the Earth](https://friendsoftheearth.uk/)
 - Catriona Cockburn, [Energise South Downs](https://esd.energy/)
 - Ben Sharpe, [Energise South Coast](https://www.energisesussexcoast.co.uk/)
 - Francis Cram, [MapStand](https://mapstand.com/)
