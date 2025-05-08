@@ -21,7 +21,7 @@ resource "google_compute_instance" "vm_instance" {
   name         = "terraform-instance"
   machine_type = "c4a-highmem-1"
   tags         = ["ssh", "http-server", "https-server"]
-  metadata_startup_script = file("../../openwindenergy-build-ubuntu.sh")
+  metadata_startup_script = file("../install.sh")
 
   boot_disk {
     initialize_params {
@@ -33,7 +33,7 @@ resource "google_compute_instance" "vm_instance" {
 
   environment {
     variables = {
-      SERVER_USERNAME = var.username
+      SERVER_USERNAME = var.adminname
       SERVER_PASSWORD = var.password
     }
   }

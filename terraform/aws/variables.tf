@@ -1,15 +1,11 @@
-variable "project" {
+variable "adminname" {
   type        = string
-  description = "The cloud project id to use when creating the server."
-}
-
-variable "username" {
-  type        = string
-  description = "The username for logging into the server."
+  description = "Enter a new administrator username that you will use for logging into your Open Wind Energy server:"
 }
 
 variable "password" {
   type        = string
-  description = "The password for logging into the server."
+  description = "Enter a password for your new administrator account:"
+  sensitive   = true
 }
 

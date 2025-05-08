@@ -36,6 +36,11 @@ fi
 # Query user to set up server login credentials early on
 # Ideally these values are set through Terraform apply
 
+if [ -f "/tmp/.env" ]; then
+    . /tmp/.env
+    rm /tmp/.env
+fi
+
 if [ -z "${SERVER_USERNAME}" ] || [ -z "${SERVER_PASSWORD}" ]; then
    echo "Enter username for logging into server:"
    read SERVER_USERNAME

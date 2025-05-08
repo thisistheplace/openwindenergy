@@ -63,6 +63,16 @@ sitepredictor/output-turbines.csv
 sitepredictor/projects_oppositiongroups_boolean.json
 sitepredictor/projects_sentiment_scores_pass2.json
 sitepredictor/projects_sentiment_scores_pass3.json
+terraform/aws/.terraform.lock.hcl
+terraform/aws/.terraform.tfstate.lock.info
+terraform/aws/.terraform/
+terraform/aws/terraform.tfstate
+terraform/aws/terraform.tfstate.backup
+terraform/gcp/.terraform.lock.hcl
+terraform/gcp/.terraform.tfstate.lock.info
+terraform/gcp/.terraform/
+terraform/gcp/terraform.tfstate
+terraform/gcp/terraform.tfstate.backup
 test.kml
 testtippecanoe.py
 openmaptiles-fonts/
