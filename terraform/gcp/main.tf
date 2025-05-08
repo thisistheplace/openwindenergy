@@ -8,38 +8,40 @@ terraform {
 }
 
 provider "google" {
-  project = var.project
+  project = var._project
   region  = "us-east1"
   zone    = "us-east1-c"
 }
 
-resource "google_compute_network" "vpc_network" {
-  name = "terraform-network"
+resource "google_compute_network" "openwindenergy_network" {
+  name = "openwindenergy-network"
 }
 
 resource "google_compute_instance" "vm_instance" {
-  name         = "terraform-instance"
-  machine_type = "c4a-highmem-1"
+  name         = "openwindenergy-server"
+  machine_type = "c4a-standard-4"
   tags         = ["ssh", "http-server", "https-server"]
-  metadata_startup_script = file("../install.sh")
+  metadata_startup_script = <<EOF
+#!/bin/bash
+echo "SERVER_USERNAME=${var.adminname}
+SERVER_PASSWORD=${var.password}" >> /tmp/.env
+sudo apt update -y
+sudo apt install wget -y
+wget https://raw.githubusercontent.com/open-wind/openwindenergy/refs/heads/main/openwindenergy-build-ubuntu.sh
+chmod +x openwindenergy-build-ubuntu.sh
+sudo ./openwindenergy-build-ubuntu.sh
+EOF
+
 
   boot_disk {
     initialize_params {
       image = "ubuntu-2504-plucky-arm64-v20250424"
       size = "120"
-      type = "pd-ssd"
-    }
-  }
-
-  environment {
-    variables = {
-      SERVER_USERNAME = var.adminname
-      SERVER_PASSWORD = var.password
     }
   }
 
   network_interface {
-    network = google_compute_network.vpc_network.name
+    network = google_compute_network.openwindenergy_network.name
     access_config {
     }
   }
@@ -47,7 +49,7 @@ resource "google_compute_instance" "vm_instance" {
 
 resource "google_compute_firewall" "allow_ssh" {
   name        = "allow-ssh"
-  network     = google_compute_network.vpc_network.name
+  network     = google_compute_network.openwindenergy_network.name
   direction   = "INGRESS"
   priority    = 1000
   target_tags = ["ssh"] # Replace with your instance's target tag
@@ -60,7 +62,7 @@ resource "google_compute_firewall" "allow_ssh" {
 
 resource "google_compute_firewall" "allow_http_https" {
   name          = "allow-http-https"
-  network       = google_compute_network.vpc_network.name
+  network       = google_compute_network.openwindenergy_network.name
   priority      = 1000          
   direction     = "INGRESS"
   source_ranges = ["0.0.0.0/0"]
