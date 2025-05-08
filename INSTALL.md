@@ -16,13 +16,15 @@
 
 - [Docker](https://www.docker.com/): For previewing final data in TileServer-GL - *desirable but not mandatory*.
 
-## Docker and Local (non-Docker) installs
+## Docker, local (non-Docker) and cloud-computing installs
 
-The Open Wind Energy toolkit has two flavours of build process:
+The Open Wind Energy toolkit has three flavours of build process:
 
 - **1. Docker-based**: The entire build is run within Docker instances. This is the recommended option as it helps avoid installation issues.
 
 - **2. Local (non-Docker) based**: All of the build runs without Docker. This may be desirable for performance reasons or when there is a need to quickly modify the codebase and / or resolve technical issues. There may, however, be a need to run Docker after the build has completed in order to view results through a Dockerized tileserver. 
+
+- **3. Cloud computing server**: Creates a dedicated cloud computing server (AWS and GCP currently supported) that installs the required software, runs the build process and serves the final layers through a web interface. The server instance also provides a user-friendly web interface for running customized builds. *Note: creating a cloud computing server will incur charges.*
 
 ## Software Platforms
 
@@ -37,6 +39,8 @@ Next steps:
 - For Mac, go to [1c. Mac - All installs](#1c-mac---all-installs)
 
 - For Ubuntu, go to [1d. Ubuntu - All installs](#1d-ubuntu---all-installs)
+
+- For a cloud computing server install, go to [1e. Cloud computing server](#1e-cloud-computing-server)
 
 ## 1a. Windows - Docker-based install
 
@@ -157,6 +161,84 @@ sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin dock
 - To create a **Docker-based install**, go to section [2. All platforms - Docker-based install -> Build -> View](#2-all-platforms---docker-based-install---build---view).
 
 - To create a **Local (non-Docker) install**, go to section [3b. Ubuntu - Local (non-Docker) install](#3b-ubuntu---local-non-docker-install).
+
+## 1e. Cloud computing server
+
+Install `Terraform` using the instructions at:
+
+- https://developer.hashicorp.com/terraform/install
+
+After installing `Terraform`, install the necessary cloud provider client software and set up login credentials for the cloud provider. Open Wind Energy currently supports `AWS` and `Google Cloud` and cloud-specific instructions for both are provided below:
+
+### AWS - Initial setup
+
+1. Install [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html)
+2. Login to your AWS account via a web browser and set up an `ACCESS_KEY` and `SECRET_ACCESS_KEY`. Store these variables somewhere safe.
+3. Open a command prompt and export the previous `ACCESS_KEY` and `SECRET_ACCESS_KEY` values as environment variables:
+
+```
+export AWS_ACCESS_KEY_ID=<YOUR_ACCESS_KEY_ID>
+export AWS_SECRET_ACCESS_KEY=<YOUR_SECRET_ACCESS_KEY>
+```
+
+4. Change to Open Wind Energy's `terraform/aws` directory and initialize `Terraform` for this folder:
+
+```
+cd terraform/aws/
+terraform init
+```
+
+### Google Cloud - Initial setup
+
+1. Install [gcloud CLI](https://cloud.google.com/sdk/docs/install)
+2. Enable Google Cloud authentication by entering:
+
+```
+gcloud auth application-default login
+```
+3. Login to your Google Cloud account and create a new project. Copy the `Project ID` for this project.
+
+4. Change to Open Wind Energy's `terraform/gcp` directory and initialize `Terraform` for this folder:
+
+```
+cd terraform/gcp
+terraform init
+```
+
+### AWS and GCP build
+
+While still in a cloud provider folder (`terraform/aws` or `terraform/gcp`), run the `Terraform` build process:
+
+```
+terraform apply
+```
+
+If building a `Google Cloud` instance, you will be prompted for a `Project ID` - use the value for your project that you copied during the initial setup, 
+
+You will then be prompted for a new `username` and `password` - these should be the `username` and `password` you want to use to login to your new Open Wind Energy server, ie. **NOT your cloud computing `username`/`password`** - do not enter these under any circumstances unless logging into your cloud computing account through a web browser.
+
+`Terraform` will then display its intended `build plan` for your cloud server. If this all looks correct, enter `yes` when prompted and a new cloud server will then be created.
+
+**Note: Creating a new cloud server will incur charges. Once you enter `yes`, you will be charged by your respective gloud computing provider.**
+
+Once the cloud server is running, locate the `external IP Address` for the server and enter it into a web browser *without* the `https://` prefix:
+
+```
+http://[serveripaddress]
+```
+
+After several minutes, a login to your new Open Wind Energy server will appear. This will display detailed logs showing the build process. Note that a typical build will take upwards of 6 hours to complete, even on a fast server.
+
+The Open Wind Energy Server also offers the following functionality:
+
+- Once a build has completed, you can modify build configurations and run a new build.
+- Download exported files.
+- Link to the latest map showing layers from latest build. 
+
+### Next steps:
+
+- Your installation is complete! Go to `http://[serveripaddress]/admin` to view logs, modify build configurations and download exported files.
+
 
 ## 2. All platforms - Docker-based install -> Build -> View
 
