@@ -3498,6 +3498,9 @@ print("""\033[1;34m
 ***********************************************************************
 \033[0m""")
 
+with open('PROCESSINGSTART', 'w', encoding='utf-8') as file: 
+    file.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S,000 Processing started"))
+
 LogMessage("***********************************************************************")
 LogMessage("*************** Starting Open Wind Energy data pipeline ***************")
 LogMessage("***********************************************************************")

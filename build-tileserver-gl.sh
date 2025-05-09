@@ -46,10 +46,9 @@ WSGIDaemonProcess openwindenergy-admin user=www-data group=www-data threads=5 ho
     Require all granted
 </directory>
 </VirtualHost>
-" | sudo tee /etc/apache2/sites-enabled/000-default.conf >/dev/null
+" > /etc/apache2/sites-enabled/000-default.conf
 
 echo '********* POST-BUILD: Restarting system daemons **********' >> /usr/src/openwindenergy/log.txt
-echo 'Restarting...' >> /usr/src/openwindenergy/log.txt
 
 echo '' >> /usr/src/openwindenergy/RESTARTSERVICES
 

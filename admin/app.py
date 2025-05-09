@@ -65,6 +65,7 @@ POSTGRES_PASSWORD                   = os.environ.get("POSTGRES_PASSWORD")
 PROCESSING_COMMAND_LINE_EXTERNAL    = './build-cli.sh'
 PROCESSING_COMMAND_LINE_SERVER      = '../build-server.sh'
 PROCESSING_STATE_FILE               = '../PROCESSING'
+PROCESSING_START                    = '../PROCESSINGSTART'
 
 app = Flask(__name__)
 application = app
@@ -159,7 +160,6 @@ def setProcessing(processing_state, command_line=''):
     global PROCESSING_STATE_FILE, PROCESSING_COMMAND_LINE_SERVER
 
     if processing_state:
-        session['started_datetime'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S,000 Processing started")
         with open(PROCESSING_STATE_FILE, 'w', encoding='utf-8') as file: file.write(command_line)
         # Restart processing system daemon using command line parameters
 
@@ -473,22 +473,25 @@ def serverlogs():
     Renders logs page
     """
 
-    global PROCESSING_STATE_FILE
+    global PROCESSING_START, PROCESSING_STATE_FILE
 
     if not isLoggedIn(): return redirect(url_for('login'))
     if not isProcessing(): return redirect(url_for('settings'))
 
     if 'command_line' not in session: session['command_line'] = ''
-    if 'started_datetime' not in session: session['started_datetime'] = None
 
     if isfile(PROCESSING_STATE_FILE):
         with open(PROCESSING_STATE_FILE, "r", encoding='utf-8') as text_file: session['command_line'] = text_file.read().strip()
+
+    started_datetime = None
+    if isfile(PROCESSING_START):
+        with open(PROCESSING_START, "r", encoding='utf-8') as text_file: started_datetime = text_file.read().strip()
 
     # Only show 'Stop processing' button during a build - if software install, hide it
     hide_stop = False
     if 'build-cli.sh' not in session['command_line']: hide_stop = True
 
-    return render_template("logs.html", command_line=session['command_line'], started_datetime=session['started_datetime'], hide_stop=hide_stop) 
+    return render_template("logs.html", command_line=session['command_line'], started_datetime=started_datetime, hide_stop=hide_stop) 
 
 @app.route("/processingstart", methods=['POST'])
 def processingstart():

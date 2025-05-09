@@ -232,6 +232,7 @@ WSGIDaemonProcess openwindenergy-admin user=www-data group=www-data threads=5 ho
 </directory>
 </VirtualHost>
 " | sudo tee /etc/apache2/sites-enabled/000-default.conf >/dev/null
+sudo chown www-data:www-data /etc/apache2/sites-enabled/000-default.conf
 
 while is_in_activation frontail ; do true; done
 
