@@ -416,7 +416,6 @@ echo '===================================================' >> /usr/src/openwinde
 echo '========= STARTUP INSTALLATION COMPLETE ===========' >> /usr/src/openwindenergy/log.txt
 echo '===================================================' >> /usr/src/openwindenergy/log.txt
 echo '' >> /usr/src/openwindenergy/log.txt
-echo '' >> /usr/src/openwindenergy/log.txt
 
 echo '===================================================' >> /usr/src/openwindenergy/log.txt
 echo '================= STARTING BUILD ==================' >> /usr/src/openwindenergy/log.txt

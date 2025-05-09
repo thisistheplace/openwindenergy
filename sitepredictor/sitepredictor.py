@@ -55,6 +55,7 @@ import h2o
 import pandas as pd
 import numpy as np
 import geopandas as gpd
+from multiprocessing import Pool
 from rasterio.transform import from_origin
 from datetime import datetime
 from pathlib import Path
@@ -1608,12 +1609,19 @@ def buildBatchGridOutputGeoTIFF(output_data, batch_index, batch_grid_spacing):
 
     return buildBatchFilename(output_data, batch_index, batch_grid_spacing) + '.tif'
 
-def buildBatchGridTableName(batch_index, batch_grid_spacing):
+def buildBatchGridTableName(batch_grid_spacing):
     """
     Builds batch grid table name
     """
 
-    return "sitepredictor__batch_grid__index_" + str(batch_index) + "_spacing_" + str(batch_grid_spacing) + "_m__uk"
+    return "sitepredictor__batch_grid__spacing_" + str(batch_grid_spacing) + "_m__uk"
+
+def buildBatchCellTableName(batch_index, batch_grid_spacing):
+    """
+    Builds batch cell table name
+    """
+
+    return "sitepredictor__batch_grid__batch_" + str(batch_index) + "_spacing_" + str(batch_grid_spacing) + "_m__uk"
 
 def buildBatchRasterFilename(output, batch_index, batch_grid_spacing):
     """
@@ -3163,6 +3171,35 @@ def createDistanceCache(tables):
             cache.distance = 0 AND cache.table_name = %s;
             """, (AsIs(DISTANCE_CACHE_TABLE), AsIs(table), table, ))
 
+def createBatchGrid(batch_grid_spacing):
+    """
+    Creates batch grid for multiprocessing 
+    """
+
+    if batch_grid_spacing is None: return None
+
+    batch_grid_table = buildBatchGridTableName(batch_grid_spacing)
+
+    if not postgisCheckTableExists(batch_grid_table):
+
+        LogMessage("Creating batch processing grid overlay for multiprocessing")
+
+        postgisExec("CREATE TABLE %s AS SELECT (ST_SquareGrid(%s, ST_Transform(geom, 27700))).geom geom FROM overall_clipping__union;", 
+                    (AsIs(batch_grid_table), AsIs(batch_grid_spacing), ))
+        postgisExec("ALTER TABLE %s ADD COLUMN temp_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY", (AsIs(batch_grid_table), ))
+        postgisExec("DELETE FROM %s WHERE temp_id IN (SELECT grid.temp_id FROM %s grid, overall_clipping__union clipping WHERE ST_Intersects(ST_Transform(grid.geom, 4326), clipping.geom) IS FALSE);", \
+                    (AsIs(batch_grid_table), AsIs(batch_grid_table), ))
+        postgisExec("ALTER TABLE %s DROP COLUMN temp_id", (AsIs(batch_grid_table), ))
+        postgisExec("ALTER TABLE %s ADD COLUMN id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY", (AsIs(batch_grid_table), ))
+        postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(batch_grid_table + "_idx"), AsIs(batch_grid_table), ))
+
+    number_batches = postgisGetResults("SELECT COUNT(*) FROM %s;", (AsIs(batch_grid_table), ))
+    number_batches = number_batches[0][0]
+
+    LogMessage("Total number of batches: " + str(number_batches))
+
+    return number_batches
+    
 def createSamplingGrid(batch_index, batch_grid_spacing):
     """
     Creates sampling grid for use in building final result maps
@@ -3173,25 +3210,18 @@ def createSamplingGrid(batch_index, batch_grid_spacing):
     if (batch_index is not None) and (batch_grid_spacing is not None):
 
         batch_sampling_grid = buildBatchSamplingGridTableName(batch_index, batch_grid_spacing)
-        batch_grid_table = buildBatchGridTableName(batch_index, batch_grid_spacing)
-
-        if not postgisCheckTableExists(batch_grid_table):
-
-            LogMessage("Creating batch processing grid overlay to allow concurrent processing on separate machines")
-
-            postgisExec("CREATE TABLE %s AS SELECT (ST_SquareGrid(%s, ST_Transform(geom, 27700))).geom geom FROM overall_clipping__union;", 
-                        (AsIs(batch_grid_table), AsIs(batch_grid_spacing), ))
-            postgisExec("ALTER TABLE %s ADD COLUMN temp_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY", (AsIs(batch_grid_table), ))
-            postgisExec("DELETE FROM %s WHERE temp_id IN (SELECT grid.temp_id FROM %s grid, overall_clipping__union clipping WHERE ST_Intersects(ST_Transform(grid.geom, 4326), clipping.geom) IS FALSE);", \
-                        (AsIs(batch_grid_table), AsIs(batch_grid_table), ))
-            postgisExec("ALTER TABLE %s DROP COLUMN temp_id", (AsIs(batch_grid_table), ))
-            postgisExec("ALTER TABLE %s ADD COLUMN id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY", (AsIs(batch_grid_table), ))
-            postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(batch_grid_table + "_idx"), AsIs(batch_grid_table), ))
-
+        batch_grid_table = buildBatchGridTableName(batch_grid_spacing)
+        batch_cell_table = buildBatchCellTableName(batch_index, batch_grid_spacing)
         number_batches = postgisGetResults("SELECT COUNT(*) FROM %s;", (AsIs(batch_grid_table), ))
         number_batches = number_batches[0][0]
 
-        LogMessage("Total number of batches: " + str(number_batches))
+        if not postgisCheckTableExists(batch_cell_table):
+
+            LogMessage("Creating individual batch cell for multiprocessing")
+
+            postgisExec("CREATE TABLE %s AS SELECT geom FROM %s WHERE id = %s", \
+                        (AsIs(batch_cell_table), AsIs(batch_grid_table), batch_index, ))
+            postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(batch_cell_table + "_idx"), AsIs(batch_cell_table), ))
 
         if postgisCheckTableExists(batch_sampling_grid): postgisDropTable(batch_sampling_grid)
 
@@ -3199,7 +3229,6 @@ def createSamplingGrid(batch_index, batch_grid_spacing):
 
         # Note: It's important RASTER_RESOLUTION is float when sent to ST_AsRaster 
         # otherwise interpreted as number of rows/columns rather than size of rows/columns
-        #  
         postgisExec("""
         CREATE TABLE %s AS
         (
@@ -3412,13 +3441,20 @@ def createTestSamplingGrid(position):
     postgisExec("ALTER TABLE %s ADD COLUMN id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY;", (AsIs(SAMPLING_GRID), ))
 
 
-def createSamplingGridData(batch_index, batch_grid_spacing):
+def createSamplingGridData(batch_values):
     """
     Generates sampling grid data, ie. same features created for all failed/successful wind turbines but for all sampling grid points
     """
 
     global RASTER_RESOLUTION, OUTPUT_DATA_SAMPLEGRID
 
+    batch_index, batch_grid_spacing = None, None
+    if (batch_values is not None):
+        batch_index, batch_grid_spacing = batch_values[0], batch_values[1]
+
+    LogMessage("========================================")
+    LogMessage("== Starting batch: " + str(batch_index))
+    LogMessage("========================================")
 
     # ************************************************************
     # ******************* CREATE SAMPLING GRID *******************
@@ -3506,10 +3542,6 @@ def createSamplingGridData(batch_index, batch_grid_spacing):
     for index in range(len(sample_grid)):
         turbine = {}
 
-        # if index < 514705: continue
-
-        # print(index)
-
         if index % 100 == 0:
             LogMessage("Processing hypothetical turbine position: " + str(index + 1) + "/" + str(totalrecords))
 
@@ -3524,73 +3556,73 @@ def createSamplingGridData(batch_index, batch_grid_spacing):
         LogStage("Step 1")
 
         turbine_lnglat = {'lng': sample_grid[index]['lng'], 'lat': sample_grid[index]['lat']}
-        turbine_xy = {'x': sample_grid[index]['easting'], 'y': sample_grid[index]['northing']}
-        turbine['turbine_country'] = getCountry(turbine_lnglat)
-        if turbine['turbine_country'] is None: 
-            LogMessage("No country found for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
-            continue
+        # turbine_xy = {'x': sample_grid[index]['easting'], 'y': sample_grid[index]['northing']}
+        # turbine['turbine_country'] = getCountry(turbine_lnglat)
+        # if turbine['turbine_country'] is None: 
+        #     LogMessage("No country found for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
+        #     continue
 
-        LogStage("Step 2")
+        # LogStage("Step 2")
 
-        turbine['turbine_elevation'] = getElevation(turbine_lnglat)[0]
+        # turbine['turbine_elevation'] = getElevation(turbine_lnglat)[0]
 
-        LogStage("Step 3")
+        # LogStage("Step 3")
 
-        turbine['turbine_grid_coordinates_srs'] = 'EPSG:27700'
-        turbine['turbine_grid_coordinates_easting'] = sample_grid[index]['easting']
-        turbine['turbine_grid_coordinates_northing'] = sample_grid[index]['northing']
+        # turbine['turbine_grid_coordinates_srs'] = 'EPSG:27700'
+        # turbine['turbine_grid_coordinates_easting'] = sample_grid[index]['easting']
+        # turbine['turbine_grid_coordinates_northing'] = sample_grid[index]['northing']
         turbine['turbine_lnglat_lng'] = turbine_lnglat['lng']
         turbine['turbine_lnglat_lat'] = turbine_lnglat['lat']
-        turbine['windspeed'] = getWindSpeed(turbine_lnglat)
-        turbine['project_size'] = 1
+        # turbine['windspeed'] = getWindSpeed(turbine_lnglat)
+        # turbine['project_size'] = 1
 
-        LogStage("Step 4")
+        # LogStage("Step 4")
 
-        census = getCensus(turbine_lnglat)
-        if census is None:
-            LogMessage("No census data for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
-            continue
+        # census = getCensus(turbine_lnglat)
+        # if census is None:
+        #     LogMessage("No census data for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
+        #     continue
 
-        LogStage("Step 5")
+        # LogStage("Step 5")
 
-        for census_key in census.keys(): turbine[census_key] = census[census_key]
+        # for census_key in census.keys(): turbine[census_key] = census[census_key]
 
-        political = {
-            'political_total': None,
-            'political_con': None,
-            'political_lab': None,
-            'political_ld': None,
-            'political_other': None,
-            'political_nat': None,
-            'political_proportion_con': None,
-            'political_proportion_lab': None,
-            'political_proportion_ld': None,
-            'political_proportion_other': None,
-            'political_proportion_nat': None,
-        }
+        # political = {
+        #     'political_total': None,
+        #     'political_con': None,
+        #     'political_lab': None,
+        #     'political_ld': None,
+        #     'political_other': None,
+        #     'political_nat': None,
+        #     'political_proportion_con': None,
+        #     'political_proportion_lab': None,
+        #     'political_proportion_ld': None,
+        #     'political_proportion_other': None,
+        #     'political_proportion_nat': None,
+        # }
 
-        year = str(int(datetime.today().strftime('%Y')) - 1)
-        political = getPolitical(turbine_lnglat, year)
+        # year = str(int(datetime.today().strftime('%Y')) - 1)
+        # political = getPolitical(turbine_lnglat, year)
 
-        if political is None:
-            LogMessage("No political data for point: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']) + " so skipping")
-            continue
+        # if political is None:
+        #     LogMessage("No political data for point: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']) + " so skipping")
+        #     continue
 
-        LogStage("Step 6")
+        # LogStage("Step 6")
 
-        for political_key in political.keys(): turbine[political_key] = political[political_key]
+        # for political_key in political.keys(): turbine[political_key] = political[political_key]
 
-        for distance_range in distance_ranges:
-            radiuspoints                                                        = runRadiusSearch(turbine_xy, 1000 * distance_range, None)
-            turbine['count__operational_within_' + str(distance_range)+'km']    = getOperationalBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
-            turbine['count__approved_within_' + str(distance_range)+'km']       = getApprovedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
-            turbine['count__applied_within_' + str(distance_range)+'km']        = getAppliedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
-            turbine['count__rejected_within_' + str(distance_range)+'km']       = getRejectedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+        # for distance_range in distance_ranges:
+        #     radiuspoints                                                        = runRadiusSearch(turbine_xy, 1000 * distance_range, None)
+        #     turbine['count__operational_within_' + str(distance_range)+'km']    = getOperationalBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+        #     turbine['count__approved_within_' + str(distance_range)+'km']       = getApprovedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+        #     turbine['count__applied_within_' + str(distance_range)+'km']        = getAppliedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+        #     turbine['count__rejected_within_' + str(distance_range)+'km']       = getRejectedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
 
-        LogStage("Step 7")
+        # LogStage("Step 7")
 
-        if batch_index is None:
-            for distance_key in distances[index].keys(): turbine[distance_key] = distances[index][distance_key]
+        # if batch_index is None:
+        #     for distance_key in distances[index].keys(): turbine[distance_key] = distances[index][distance_key]
 
         if not firstrowwritten:
             with open(output_data, 'w', newline='') as csvfile:
@@ -3605,8 +3637,11 @@ def createSamplingGridData(batch_index, batch_grid_spacing):
 
         index += 1
 
-    # For batched processing, add distances from batch rasters to turbine positions after finishing main processing
+        # # ***** FOR MULTIPROCESSING TESTING *****
+        # # break after a small sample
+        # if index > 10: break
 
+    # For batched processing, add distances from batch rasters to turbine positions after finishing main processing
     if batch_index is not None:
 
         for table in tables_to_test:
@@ -3657,6 +3692,10 @@ def createSamplingGridData(batch_index, batch_grid_spacing):
         if postgisCheckTableExists(batch_sampling_grid): 
             LogMessage("Dropping batch sampling grid table: " + batch_sampling_grid)
             postgisDropTable(batch_sampling_grid)
+
+    LogMessage("========================================")
+    LogMessage("== Ending batch: " + str(batch_index))
+    LogMessage("========================================")
 
 def createAllTurbinesData():
     """
@@ -3830,7 +3869,7 @@ def createAllTurbinesData():
 
         index += 1
 
-def runSitePredictor(batch_index, batch_grid_spacing):
+def runSitePredictor(batch_grid_spacing):
     """
     Runs entire site predictor application
     """
@@ -3849,11 +3888,20 @@ def runSitePredictor(batch_index, batch_grid_spacing):
 
     # machinelearningBuildModel()
 
-    # Populates sampling grid (spaced at RASTER_RESOLUTION metres) with same
-    # features data - where possible - as all turbines, above. 
-    # Year used is (CURRENTYEAR - 1), ie. attempting to predict probability-of-success for now
+    # Create batch grid for multiprocessing
+    number_batches = createBatchGrid(batch_grid_spacing)
 
-    # createSamplingGridData(batch_index, batch_grid_spacing)
+    # Run multiprocessing pool
+    multiprocessing_batch_values = [[batch_index, batch_grid_spacing] for batch_index in range(1, number_batches + 1)]
+    with Pool(None) as p:
+        # Populates sampling grid (spaced at RASTER_RESOLUTION metres) with same
+        # features data - where possible - as all turbines, above. 
+        # Year used is (CURRENTYEAR - 1), ie. attempting to predict probability-of-success for now
+        p.map(createSamplingGridData, multiprocessing_batch_values)
+
+    # ******** TO DO **********
+    # *** Consolidate all final batch files into single file
+    # *** Batch apply machine learning due to memory issues (is this really necessary??)
 
     # Run machine learning model on sampling grid
 
@@ -3865,15 +3913,11 @@ def runSitePredictor(batch_index, batch_grid_spacing):
 # ***********************************************************
 # ***********************************************************
 
-# batch_index indicates specific batch to process - for multi-server processing
-batch_index, batch_grid_spacing = None, None
+batch_grid_spacing = None
 
 if len(sys.argv) > 1:
-    if len(sys.argv) < 3:
-        LogMessage("batch processing requires: [batch index] [batch grid spacing in metres]")
-        exit()
-    batch_index, batch_grid_spacing = sys.argv[1], sys.argv[2]
-    LogMessage("Running batch processing with batch_index = " + str(batch_index) + " and batch_grid_spacing = " + str(batch_grid_spacing))
+    batch_grid_spacing = sys.argv[1]
+    LogMessage("Running batch processing with batch_grid_spacing = " + str(batch_grid_spacing))
 
-runSitePredictor(batch_index, batch_grid_spacing)
+runSitePredictor(batch_grid_spacing)
 
