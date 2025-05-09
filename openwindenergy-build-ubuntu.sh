@@ -214,8 +214,8 @@ SERVER_PASSWORD=${SERVER_PASSWORD}
 sudo cp /usr/src/openwindenergy/apache/001-default-build-post.conf /etc/apache2/sites-available/.
 sudo cp /usr/src/openwindenergy/apache/002-default-build-pre.conf /etc/apache2/sites-available/.
 
-sudo a2dissite 000-default.conf | tee -a /usr/src/openwindenergy/log.txt
 sudo a2ensite 002-default-build-pre.conf | tee -a /usr/src/openwindenergy/log.txt
+sudo a2dissite 000-default.conf | tee -a /usr/src/openwindenergy/log.txt
 
 while is_in_activation frontail ; do true; done
 
