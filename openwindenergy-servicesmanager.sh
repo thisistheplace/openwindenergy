@@ -6,8 +6,10 @@ while true
     do
         sleep 1
         if [ -f "/usr/src/openwindenergy/RESTARTSERVICES" ]; then
-            echo "Restarting tileserver.service and apache2"
+            echo "Restarting tileserver.service and apache2 with post-build conf"
             sudo /usr/bin/systemctl restart tileserver.service
+            sudo a2ensite 001-default-build-post.conf
+            sudo a2dissite 002-default-build-pre.conf
             sudo /usr/sbin/apache2ctl restart
             rm /usr/src/openwindenergy/RESTARTSERVICES
         fi

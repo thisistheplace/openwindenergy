@@ -211,28 +211,11 @@ SERVER_USERNAME=${SERVER_USERNAME}
 SERVER_PASSWORD=${SERVER_PASSWORD}
 " > /usr/src/openwindenergy/.env-server
 
-echo "<VirtualHost *:80>
-ServerAdmin webmaster@localhost
-ErrorLog /var/log/apache2/openwindenergy-error.log
-CustomLog /var/log/apache2/openwindenergy-access.log combined
-ProxyPass /logs http://localhost:9001/logs
-ProxyPassReverse /logs http://localhost:9001/logs
-RewriteEngine on
-RewriteCond %{HTTP:Upgrade} websocket [NC]
-RewriteCond %{HTTP:Connection} upgrade [NC]
-RewriteRule ^/?(.*) \"ws://localhost:9001/\$1\" [P,L]
-# Set up Flask admin application
-WSGIScriptAlias / /usr/src/openwindenergy/admin/app.py
-WSGIDaemonProcess openwindenergy-admin user=www-data group=www-data threads=5 home=/usr/src/openwindenergy/admin python-home=/usr/src/openwindenergy/venv
-<directory /usr/src/openwindenergy/admin/>
-    WSGIProcessGroup openwindenergy-admin
-    WSGIApplicationGroup %{GLOBAL}
-    WSGIScriptReloading On
-    Require all granted
-</directory>
-</VirtualHost>
-" | sudo tee /etc/apache2/sites-enabled/000-default.conf >/dev/null
-sudo chown www-data:www-data /etc/apache2/sites-enabled/000-default.conf
+sudo cp /usr/src/openwindenergy/apache/001-default-build-post.conf /etc/apache2/sites-available/.
+sudo cp /usr/src/openwindenergy/apache/002-default-build-pre.conf /etc/apache2/sites-available/.
+
+sudo a2dissite 000-default.conf | tee -a /usr/src/openwindenergy/log.txt
+sudo a2ensite 002-default-build-pre.conf | tee -a /usr/src/openwindenergy/log.txt
 
 while is_in_activation frontail ; do true; done
 
@@ -254,7 +237,7 @@ echo '********* STAGE 5: Finished installing nodejs, npm and frontail **********
 echo '' >> /usr/src/openwindenergy/log.txt
 echo '********* STAGE 6: Installing general tools and required libraries **********' >> /usr/src/openwindenergy/log.txt
 
-sudo NEEDRESTART_MODE=a apt install gnupg software-properties-common cmake make g++ dpkg build-essential autoconf pkg-config -y  | tee -a /usr/src/openwindenergy/log.txt
+sudo NEEDRESTART_MODE=a apt install gnupg software-properties-common cmake make g++ dpkg build-essential autoconf pkg-config -y | tee -a /usr/src/openwindenergy/log.txt
 sudo NEEDRESTART_MODE=a apt install libbz2-dev libpq-dev libboost-all-dev libgeos-dev libtiff-dev libspatialite-dev -y | tee -a /usr/src/openwindenergy/log.txt
 sudo NEEDRESTART_MODE=a apt install libsqlite3-dev libcurl4-gnutls-dev liblua5.4-dev rapidjson-dev libshp-dev libgdal-dev gdal-bin -y | tee -a /usr/src/openwindenergy/log.txt
 sudo NEEDRESTART_MODE=a apt install zip unzip lua5.4 shapelib ca-certificates curl nano wget pip proj-bin spatialite-bin sqlite3 -y | tee -a /usr/src/openwindenergy/log.txt
