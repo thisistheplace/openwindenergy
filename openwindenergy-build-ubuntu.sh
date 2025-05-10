@@ -86,6 +86,7 @@ mkdir /var/www
 mkdir /var/www/html
 echo '<!doctype html><html><head><meta http-equiv="refresh" content="2"></head><body><pre>Beginning installation of Open Wind Energy...</pre></body></html>' | sudo tee /var/www/html/index.html
 sudo apt install apache2 libapache2-mod-wsgi-py3 -y
+sudo apt install certbot python3-certbot-apache -y
 sudo a2enmod headers
 sudo a2enmod proxy_http
 sudo a2enmod rewrite
@@ -134,40 +135,26 @@ git clone https://github.com/open-wind/openmaptiles-fonts.git
 mv openmaptiles-fonts/fonts /usr/src/openwindenergy/build-cli/tileserver/fonts
 echo "./openwindenergy-build-ubuntu.sh" >> /usr/src/openwindenergy/PROCESSING
 sudo chown -R www-data:www-data /usr/src/openwindenergy
+sudo sed -i "s/.*TILESERVER_URL.*/    TILESERVER_URL\=\/tiles/" /usr/src/openwindenergy/.env
 
-echo "
-# Hostname of PostGIS database server to use.
-POSTGRES_HOST=localhost
+echo "[Unit]
+Description=openwindenergy-servicesmanager.service
+After=network.target
 
-# PostGIS database to use
-POSTGRES_DB=openwind
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/usr/src/openwindenergy
+ExecStart=/usr/src/openwindenergy/openwindenergy-servicesmanager.sh
+Restart=on-failure
 
-# Username of user who will access POSTGRES_DB. The user needs full access permissions to POSTGRES_DB
-POSTGRES_USER=openwind
+[Install]
+WantedBy=multi-user.target
 
-# Password of user who will access POSTGRES_DB
-POSTGRES_PASSWORD=password
+" | sudo tee /etc/systemd/system/openwindenergy-servicesmanager.service >/dev/null
 
-# URL of CKAN Open Data Portal to use to define wind (or other asset) site constraints
-CKAN_URL=https://data.openwind.energy
-
-# URL of TileServer GL instance where you will host your mbtiles, eg. `https://tiles.openwind.energy`. 
-# This variable is used when creating the MapLibre-GL test site in `[build-directory]/app/index.html` 
-# and the related TileServer-GL `*.json` style files in `[build-directory]/tileserver/styles/`
-# **** POINT TO 'tiles' SUBDIRECTORY THAT WILL BE USED ON SERVER INSTALL *****
-TILESERVER_URL=/tiles
-
-# Filesystem prefix to QGIS (see [Using PyQGIS in standalone scripts](https://docs.qgis.org/3.40/en/docs/pyqgis_developer_cookbook/intro.html#using-pyqgis-in-standalone-scripts))
-QGIS_PREFIX_PATH=/usr/
-
-# Absolute path to specific version of Python3 that QGIS uses, eg. /usr/bin/python3
-QGIS_PYTHON_PATH=/usr/bin/python3
-
-# Absolute path to PROJ library directory, eg. /usr/share/proj
-QGIS_PROJ_DATA=/usr/share/proj/
-# For legacy version of PROJ
-QGIS_PROJ_LIB=$QGIS_PROJ_DATA
-" | sudo tee /usr/src/openwindenergy/.env >/dev/null
+sudo systemctl enable openwindenergy-servicesmanager.service
+sudo systemctl start openwindenergy-servicesmanager.service
 
 echo '********* STAGE 4: Finished installing Open Wind Energy source code **********' >> /usr/src/openwindenergy/log.txt
 
@@ -183,7 +170,6 @@ sudo apt install netcat-traditional nodejs -y | tee -a /usr/src/openwindenergy/l
 sudo apt install netcat nodejs -y | tee -a /usr/src/openwindenergy/log.txt
 sudo apt install nodejs -y | tee -a /usr/src/openwindenergy/log.txt
 sudo apt install npm -y | tee -a /usr/src/openwindenergy/log.txt
-sudo NEEDRESTART_MODE=a apt install certbot python3-certbot-apache -y | tee -a /usr/src/openwindenergy/log.txt
 npm i frontail -g 2>&1 | tee -a /usr/src/openwindenergy/log.txt
 
 echo "[Unit]
@@ -227,24 +213,6 @@ echo '********* frontail service listening on port 9001 **********' >> /usr/src/
 
 echo '<!doctype html><html><head><meta http-equiv="refresh" content="2; url=/admin" /></head><body><p>Redirecting to admin system...</p></body></html>' | sudo tee /var/www/html/index.html
 
-echo "[Unit]
-Description=openwindenergy-servicesmanager.service
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/usr/src/openwindenergy
-ExecStart=/usr/src/openwindenergy/openwindenergy-servicesmanager.sh
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-
-" | sudo tee /etc/systemd/system/openwindenergy-servicesmanager.service >/dev/null
-
-sudo systemctl enable openwindenergy-servicesmanager.service
-sudo systemctl start openwindenergy-servicesmanager.service
 sudo apache2ctl restart
 
 echo '********* STAGE 5: Finished installing nodejs, npm and frontail **********' >> /usr/src/openwindenergy/log.txt

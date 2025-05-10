@@ -580,7 +580,7 @@ def processdomain():
     if not isLoggedIn(): return redirect(url_for('login'))
 
     domain = request.form.get('domain', '').strip()
-    print(domain)
+
     try:
         domain_ip = socket.gethostbyname(domain).strip()
     except:
@@ -591,9 +591,6 @@ def processdomain():
         return render_template("setdomain.html", error=domain) 
 
     with open('/usr/src/openwindenergy/DOMAIN', 'w') as file: file.write("DOMAIN=" + domain)
-    while True:
-        if not isfile('/usr/src/openwindenergy/DOMAIN'): break
-        time.sleep(0.5)
 
     return render_template("redirect.html", domain=('https://' + domain + '/admin'))
 

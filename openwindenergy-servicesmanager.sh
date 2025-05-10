@@ -13,7 +13,6 @@ while true
             sudo /usr/sbin/apache2ctl restart
             sudo certbot --apache --non-interactive --agree-tos --email info@${DOMAIN} --domains ${DOMAIN}
             sudo /usr/sbin/apache2ctl restart
-            sudo cp /usr/src/openwindenergy/DOMAIN /usr/src/openwindenergy/DOMAINPERMANENT
             sudo rm /usr/src/openwindenergy/DOMAIN
         fi
 
@@ -23,16 +22,6 @@ while true
             sudo a2ensite 001-default-build-post.conf
             sudo a2dissite 002-default-build-pre.conf
             sudo /usr/sbin/apache2ctl restart
-
-            if [ -f "/usr/src/openwindenergy/DOMAINPERMANENT" ]; then
-                . /usr/src/openwindenergy/DOMAINPERMANENT
-                sed -i "s/.*ServerName.*/    ServerName $DOMAIN/" /etc/apache2/sites-available/001-default-build-post.conf
-                sed -i "s/.*ServerName.*/    ServerName $DOMAIN/" /etc/apache2/sites-available/002-default-build-pre.conf
-                sudo /usr/sbin/apache2ctl restart
-                sudo certbot --apache --non-interactive --agree-tos --email info@${DOMAIN} --domains ${DOMAIN}
-                sudo /usr/sbin/apache2ctl restart
-            fi
-
             rm /usr/src/openwindenergy/RESTARTSERVICES
         fi
 
