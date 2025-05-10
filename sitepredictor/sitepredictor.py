@@ -116,7 +116,7 @@ TRANSFORMER_FROM_27700              = None
 TRANSFORMER_SOURCE_4326             = None
 TRANSFORMER_DEST_27700              = None
 TRANSFORMER_TO_27700                = None
-RASTER_RESOLUTION                   = 250 # Number of metres per raster grid square
+RASTER_RESOLUTION                   = 1000 # Number of metres per raster grid square
 # # RASTER_RESOLUTION                   = 250 # Number of metres per raster grid square
 # RASTER_RESOLUTION                   = 20 # Number of metres per raster grid square
 RASTER_XMIN                         = 0 
@@ -146,6 +146,7 @@ ML_STATUS_FAILURE                   = ['Application Refused', 'Abandoned', 'Appe
 ML_STATUS_PENDING                   = ['Revised', 'Application Submitted', 'Appeal Lodged', 'No Application Required']
 ALLTURBINES_DF                      = None
 CKAN_USER_AGENT                     = 'ckanapi/1.0 (+https://openwind.energy)'
+LOG_SINGLE_PASS                     = WORKING_FOLDER + 'log.txt'
 
 # We try and include as many columns as possible to ML 
 # but there are some columns that are clearly irrelevant to prediction
@@ -381,11 +382,15 @@ MAXIMUM_DISTANCE_ENDPOINT           = 100
 
 MAXIMUM_DISTANCE_LINE               = 50
 
-
-
 logging.basicConfig(
+    level=logging.INFO,
     format='%(asctime)s [%(levelname)-2s] %(message)s',
-    level=logging.INFO)
+    handlers=[
+        logging.FileHandler(LOG_SINGLE_PASS),
+        logging.FileHandler("{0}/{1}.log".format(WORKING_FOLDER, datetime.today().strftime('%Y-%m-%d'))),
+        logging.StreamHandler()
+    ]
+)
 
 # ***********************************************************
 # ***************** General helper functions ****************
@@ -1023,6 +1028,23 @@ def postgisExec(sql_text, sql_parameters=None):
     else: cur.execute(sql_text, sql_parameters)
     conn.commit()
     conn.close()
+
+def postgisExecDelete(sql_text, sql_parameters=None):
+    """
+    Executes DELETE SQL statement and returns number of deleted rows
+    """
+
+    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+
+    conn = psycopg2.connect(host=POSTGRES_HOST, dbname=POSTGRES_DB, user=POSTGRES_USER, password=POSTGRES_PASSWORD, \
+                            keepalives=1, keepalives_idle=30, keepalives_interval=5, keepalives_count=5)
+    cur = conn.cursor()
+    if sql_parameters is None: cur.execute(sql_text)
+    else: cur.execute(sql_text, sql_parameters)
+    conn.commit()
+    deleted_rows = cur.rowcount
+    conn.close()
+    return deleted_rows
 
 def postgisImportDatasetGIS(dataset_path, dataset_table, orig_srs='EPSG:4326'):
     """
@@ -2117,14 +2139,24 @@ def generateHistoricalFootpaths():
 
             turbine_fid = operational_turbines[count][0]
 
-            LogMessage(" --> Deleting turbine-specific footpaths for turbine: " + str(count + 1) + "/" + str(len(operational_turbines)))
+            scratch_table_1 = '_scratch_table_10'
 
-            postgisExec("""
+            if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+
+            # Create 1km search bounding box to speed up MIN(ST_Distance)
+            postgisExec("CREATE TABLE %s AS SELECT ST_Envelope(ST_Buffer(ST_Transform(geom, 27700), 1000)) geom FROM %s WHERE fid=%s;", (AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid))
+            
+            num_deleted_startend = postgisExecDelete("""
             DELETE FROM %s footpath 
             WHERE 
+            ST_Intersects(footpath.geom, (SELECT geom FROM %s)) AND
+            (
             ((SELECT MIN(ST_Distance(ST_StartPoint(footpath.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s) OR 
-            ((SELECT MIN(ST_Distance(ST_EndPoint(footpath.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)""", \
+            ((SELECT MIN(ST_Distance(ST_EndPoint(footpath.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)
+            );
+            """, \
             (   AsIs(footpaths_historical_table), \
+                AsIs(scratch_table_1), \
                 AsIs(windturbines_operational_table), \
                 turbine_fid,\
                 AsIs(MAXIMUM_DISTANCE_ENDPOINT), \
@@ -2132,11 +2164,21 @@ def generateHistoricalFootpaths():
                 turbine_fid,\
                 AsIs(MAXIMUM_DISTANCE_ENDPOINT), ))
 
-            postgisExec("""
+            num_deleted_length = postgisExecDelete("""
             DELETE FROM %s footpath 
             WHERE 
-            ((SELECT MIN(ST_Distance(footpath.geom, ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)""", \
-            (AsIs(footpaths_historical_table), AsIs(windturbines_operational_table), turbine_fid, AsIs(MAXIMUM_DISTANCE_LINE), ))
+            ST_Intersects(footpath.geom, (SELECT geom FROM %s)) AND
+            ((SELECT MIN(ST_Distance(footpath.geom, ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s);
+            """, \
+            (AsIs(footpaths_historical_table), AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid, AsIs(MAXIMUM_DISTANCE_LINE), ))
+
+            if (num_deleted_startend == 0) and (num_deleted_length == 0):
+                LogMessage(" --> Deleting turbine-specific footpaths for turbine: " + str(count + 1) + "/" + str(len(operational_turbines)))
+            else:
+                LogMessage(" --> Deleting turbine-specific footpaths for turbine: " + str(count + 1) + "/" + str(len(operational_turbines)) + \
+                            " - deleted " + str(num_deleted_startend) + " endpoint-related, " + str(num_deleted_length) + " length-related")
+
+            if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
 
     LogMessage("Historical footpaths recreation: COMPLETED")
 
@@ -2174,17 +2216,24 @@ def generateHistoricalMinorRoads():
 
             turbine_fid = operational_turbines[count][0]
 
-            LogMessage(" --> Deleting turbine-specific minor service roads for turbine: " + str(count + 1) + "/" + str(len(operational_turbines)))
+            scratch_table_1 = '_scratch_table_10'
 
-            postgisExec("""
+            if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+
+            # Create 1km search bounding box to speed up MIN(ST_Distance)
+            postgisExec("CREATE TABLE %s AS SELECT ST_Envelope(ST_Buffer(ST_Transform(geom, 27700), 1000)) geom FROM %s WHERE fid=%s;", (AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid))
+
+            num_deleted_startend = postgisExecDelete("""
             DELETE FROM %s minorroad 
             WHERE 
+            ST_Intersects(minorroad.geom, (SELECT geom FROM %s)) AND
             minorroad.highway = 'service' AND 
             (
                 ((SELECT MIN(ST_Distance(ST_StartPoint(minorroad.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s) OR 
                 ((SELECT MIN(ST_Distance(ST_EndPoint(minorroad.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)
             )""", \
             (   AsIs(minorroads_historical_table), \
+                AsIs(scratch_table_1), \
                 AsIs(windturbines_operational_table), \
                 turbine_fid,\
                 AsIs(MAXIMUM_DISTANCE_ENDPOINT), \
@@ -2192,12 +2241,21 @@ def generateHistoricalMinorRoads():
                 turbine_fid,\
                 AsIs(MAXIMUM_DISTANCE_ENDPOINT), ))
 
-            postgisExec("""
+            num_deleted_length = postgisExecDelete("""
             DELETE FROM %s minorroad 
             WHERE 
+            ST_Intersects(minorroad.geom, (SELECT geom FROM %s)) AND
             minorroad.highway = 'service' AND
             ((SELECT MIN(ST_Distance(minorroad.geom, ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)""", \
-            (AsIs(minorroads_historical_table), AsIs(windturbines_operational_table), turbine_fid, AsIs(MAXIMUM_DISTANCE_LINE), ))
+            (AsIs(minorroads_historical_table), AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid, AsIs(MAXIMUM_DISTANCE_LINE), ))
+
+            if (num_deleted_startend == 0) and (num_deleted_length == 0):
+                LogMessage(" --> Deleting turbine-specific minor service roads for turbine: " + str(count + 1) + "/" + str(len(operational_turbines)))
+            else:
+                LogMessage(" --> Deleting turbine-specific minor service roads for turbine: " + str(count + 1) + "/" + str(len(operational_turbines)) + \
+                            " - deleted " + str(num_deleted_startend) + " endpoint-related, " + str(num_deleted_length) + " length-related")
+
+            if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
 
     LogMessage("Historical minor roads recreation: COMPLETED")
 
@@ -3890,6 +3948,7 @@ def runSitePredictor(batch_grid_spacing):
 
     # Create batch grid for multiprocessing
     number_batches = createBatchGrid(batch_grid_spacing)
+    LogMessage("Batch grid spacing set to " + str(batch_grid_spacing) + "metres, running multiprocessing with " + str(number_batches) + " batches")
 
     # Run multiprocessing pool
     multiprocessing_batch_values = [[batch_index, batch_grid_spacing] for batch_index in range(1, number_batches + 1)]

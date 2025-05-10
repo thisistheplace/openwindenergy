@@ -246,6 +246,7 @@ sudo NEEDRESTART_MODE=a apt install libcurl4-openssl-dev libpixman-1-dev libpixm
 sudo NEEDRESTART_MODE=a apt install libc++-dev libc++abi-dev libpng-dev -y | tee -a /usr/src/openwindenergy/log.txt
 sudo NEEDRESTART_MODE=a apt install libgl1-mesa-dev libgl1-mesa-dri libjpeg-dev -y | tee -a /usr/src/openwindenergy/log.txt
 sudo NEEDRESTART_MODE=a apt install qgis qgis-plugin-grass -y | tee -a /usr/src/openwindenergy/log.txt
+sudo NEEDRESTART_MODE=a apt install certbot python3-certbot-apache -y | tee -a /usr/src/openwindenergy/log.txt
 
 sudo apt update -y | tee -a /usr/src/openwindenergy/log.txt
 
