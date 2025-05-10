@@ -11,6 +11,7 @@ while true
             sed -i "s/.*ServerName.*/    ServerName $DOMAIN/" /etc/apache2/sites-available/001-default-build-post.conf
             sed -i "s/.*ServerName.*/    ServerName $DOMAIN/" /etc/apache2/sites-available/002-default-build-pre.conf
             sudo certbot --apache --non-interactive --agree-tos --email info@${DOMAIN} --domains ${DOMAIN}
+            sudo /usr/sbin/apache2ctl restart
             sudo cp /usr/src/openwindenergy/DOMAIN /usr/src/openwindenergy/DOMAINPERMANENT
             sudo rm /usr/src/openwindenergy/DOMAIN
         fi
