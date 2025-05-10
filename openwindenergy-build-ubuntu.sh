@@ -38,7 +38,6 @@ fi
 
 if [ -f "/tmp/.env" ]; then
     . /tmp/.env
-    rm /tmp/.env
 fi
 
 if [ -z "${SERVER_USERNAME}" ] || [ -z "${SERVER_PASSWORD}" ]; then
@@ -406,6 +405,10 @@ WantedBy=multi-user.target
 
 sudo systemctl enable openwindenergy-servicesmanager.service
 sudo systemctl start openwindenergy-servicesmanager.service
+
+if [ -f "/tmp/.env" ]; then
+    rm /tmp/.env
+fi
 
 echo 'FINISHED' >> /usr/src/openwindenergy/INSTALLCOMPLETE
 

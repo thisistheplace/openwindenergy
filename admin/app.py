@@ -467,7 +467,7 @@ def downloadqgis():
     memory_file.seek(0)
     return send_file(memory_file, download_name=('openwindenergy-qgis.zip'), as_attachment=True)
 
-@app.route("/serverlogs") 
+@app.route("/serverlogs")
 def serverlogs():
     """
     Renders logs page
