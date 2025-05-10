@@ -175,13 +175,15 @@
                                         <span class="text">All SHP</span>
                                     </button></a>
 
-                                <a href="/downloadqgis">
+                                {% if qgis == True %}
+                                    <a href="/downloadqgis">
                                     <button class="btn text-sm btn-primary mb-1 btn-icon-split">
                                         <span class="icon">
                                             <i class="fa fa-download"></i>
                                         </span>
                                         <span class="text">QGIS file + attachments</span>
                                     </button></a>
+                                {% endif %}
     
                             </div>
 

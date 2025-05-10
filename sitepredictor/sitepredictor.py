@@ -1685,6 +1685,17 @@ def machinelearningInitialize():
 
     makeFolder(ML_FOLDER)
 
+def machinelearningModelExists():
+    """
+    Checks to see if existing machine learning model exists
+    """
+
+    global ML_FOLDER
+
+    savedmodels = getFilesInFolder(ML_FOLDER)
+    if len(savedmodels) > 0: return True
+    return False
+
 def machinelearningDeleteSavedModels():
     """
     Deletes all saved models
@@ -1812,14 +1823,14 @@ def machinelearningPrepareTrainingData():
 
     return df_train
 
-def machinelearningRunModelOnSamplingGrid(batch_index, batch_grid_spacing):
+def machinelearningRunModelOnSamplingGrid():
     """
     Runs machine learning model on sample grid
     """
 
     global OUTPUT_DATA_SAMPLEGRID
 
-    output_data = buildBatchGridOutputData(OUTPUT_DATA_SAMPLEGRID, batch_index, batch_grid_spacing)
+    output_data = OUTPUT_DATA_SAMPLEGRID
 
     # Initialize machine learning
     machinelearningInitialize()
@@ -1853,17 +1864,17 @@ def machinelearningRunModelOnSamplingGrid(batch_index, batch_grid_spacing):
     df_predicted = y_pred.as_data_frame().to_numpy().ravel()
     print(y_pred.as_data_frame())
 
-    machinelearningOutputGridResults(df_original, df_predicted, batch_index, batch_grid_spacing)
+    machinelearningOutputGridResults(df_original, df_predicted)
 
-def machinelearningOutputGridResults(df_original, df_predicted, batch_index, batch_grid_spacing):
+def machinelearningOutputGridResults(df_original, df_predicted):
     """
     Output results of machine learning predictions for array of points
     """
 
     global OUTPUT_ML_GEOJSON, OUTPUT_ML_RASTER
     
-    output_ml_geojson = buildBatchGridOutputGeoJSON(OUTPUT_ML_GEOJSON, batch_index, batch_grid_spacing)
-    output_ml_geotiff = buildBatchGridOutputGeoTIFF(OUTPUT_ML_RASTER, batch_index, batch_grid_spacing)
+    output_ml_geojson = OUTPUT_ML_GEOJSON
+    output_ml_geotiff = OUTPUT_ML_RASTER
 
     features = []
     count = 0
@@ -3820,7 +3831,8 @@ def createAllTurbinesData():
     # Create distance-to-turbine cache
     createDistanceCache(tables_to_test)
 
-    if isfile(OUTPUT_DATA_ALLTURBINES): os.remove(OUTPUT_DATA_ALLTURBINES)
+    # If file already created, don't do anything else
+    if isfile(OUTPUT_DATA_ALLTURBINES): return
 
     # distance_ranges = [20]
     distance_ranges = [10, 20, 30, 40]
@@ -3976,11 +3988,11 @@ def runSitePredictor(batch_grid_spacing):
     # https://www.sciencedirect.com/science/article/pii/S0301421519300023
 
     global OUTPUT_DATA_SAMPLEGRID
-    # createAllTurbinesData()
+
+    createAllTurbinesData()
 
     # Build machine learning model using failed/successful wind turbine features
-
-    # machinelearningBuildModel()
+    if not machinelearningModelExists(): machinelearningBuildModel()
 
     # Create batch grid for multiprocessing
     if batch_grid_spacing is None: batch_grid_spacing = 400000
@@ -4047,13 +4059,8 @@ def runSitePredictor(batch_grid_spacing):
 
         os.remove(batch_output_data)
 
-    # ******** TO DO **********
-    # *** Consolidate all final batch files into single file
-    # *** Batch apply machine learning due to memory issues (is this really necessary??)
-
     # Run machine learning model on sampling grid
-
-    # machinelearningRunModelOnSamplingGrid(batch_index, batch_grid_spacing)
+    machinelearningRunModelOnSamplingGrid()
 
 # ***********************************************************
 # ***********************************************************

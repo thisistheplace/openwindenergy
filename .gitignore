@@ -35,6 +35,7 @@ landcover/
 configuration/custom-test.yml
 uk-clipping.gpkg-shm
 uk-clipping.gpkg-wal
+sitepredictor/*.csv
 sitepredictor/*.log
 sitepredictor/census_2011.zip
 sitepredictor/output/

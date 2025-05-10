@@ -372,7 +372,10 @@ def files():
         output_files = getFilesInFolder(output_files_folder)
         files = [{'name': basename(file), 'url': '/outputfiles/' + file} for file in output_files]
 
-    return render_template("files.html", files=files) 
+    qgis_file = join(output_files_folder, "..", "windconstraints--latest.qgs")
+    qgis = isfile(qgis_file)
+
+    return render_template("files.html", files=files, qgis=qgis) 
 
 def download(zip_suffix, filter):
     """
