@@ -595,7 +595,7 @@ def processdomain():
         if not isfile('/usr/src/openwindenergy/DOMAIN'): break
         time.sleep(0.5)
 
-    return redirect('/login')
+    return render_template("redirect.html", domain=('https://' + domain + '/admin'))
 
 # ***********************************************************
 # ***********************************************************
