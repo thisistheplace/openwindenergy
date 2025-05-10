@@ -585,7 +585,7 @@ def processdomain():
         domain_ip = socket.gethostbyname(domain).strip()
     except:
         domain_ip = None
-    visible_ip = get('https://ipinfo.io/ip')
+    visible_ip = get('https://ipinfo.io/ip').text
 
     if domain_ip != visible_ip:
         return render_template("setdomain.html", error=domain) 
