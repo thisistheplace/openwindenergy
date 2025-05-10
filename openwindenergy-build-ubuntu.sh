@@ -226,6 +226,24 @@ echo '********* frontail service listening on port 9001 **********' >> /usr/src/
 
 echo '<!doctype html><html><head><meta http-equiv="refresh" content="2; url=/admin" /></head><body><p>Redirecting to admin system...</p></body></html>' | sudo tee /var/www/html/index.html
 
+echo "[Unit]
+Description=openwindenergy-servicesmanager.service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/usr/src/openwindenergy
+ExecStart=/usr/src/openwindenergy/openwindenergy-servicesmanager.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+
+" | sudo tee /etc/systemd/system/openwindenergy-servicesmanager.service >/dev/null
+
+sudo systemctl enable openwindenergy-servicesmanager.service
+sudo systemctl start openwindenergy-servicesmanager.service
 sudo apache2ctl restart
 
 echo '********* STAGE 5: Finished installing nodejs, npm and frontail **********' >> /usr/src/openwindenergy/log.txt
@@ -387,25 +405,6 @@ WantedBy=multi-user.target
 " | sudo tee /etc/systemd/system/openwindenergy.service >/dev/null
 
 sudo systemctl enable openwindenergy.service
-
-echo "[Unit]
-Description=openwindenergy-servicesmanager.service
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/usr/src/openwindenergy
-ExecStart=/usr/src/openwindenergy/openwindenergy-servicesmanager.sh
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-
-" | sudo tee /etc/systemd/system/openwindenergy-servicesmanager.service >/dev/null
-
-sudo systemctl enable openwindenergy-servicesmanager.service
-sudo systemctl start openwindenergy-servicesmanager.service
 
 if [ -f "/tmp/.env" ]; then
     rm /tmp/.env
