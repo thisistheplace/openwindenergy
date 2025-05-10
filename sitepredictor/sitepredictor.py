@@ -4027,37 +4027,37 @@ def runSitePredictor(batch_grid_spacing):
     LogMessage("Consolidating batch output files...")
 
     output_data = OUTPUT_DATA_SAMPLEGRID
-    if isfile(output_data): os.remove(output_data)
-    firstrowwritten = False
+    if not isfile(output_data): 
+        firstrowwritten = False
 
-    for batch_item in multiprocessing_batch_values:
-        batch_index, batch_grid_spacing = batch_item[0], batch_item[1]
-        batch_output_data = buildBatchGridOutputData(OUTPUT_DATA_SAMPLEGRID, batch_index, batch_grid_spacing)
-        if not isfile(batch_output_data): continue
+        for batch_item in multiprocessing_batch_values:
+            batch_index, batch_grid_spacing = batch_item[0], batch_item[1]
+            batch_output_data = buildBatchGridOutputData(OUTPUT_DATA_SAMPLEGRID, batch_index, batch_grid_spacing)
+            if not isfile(batch_output_data): continue
 
-        LogMessage("Adding batch output file: " + str(batch_index))
+            LogMessage("Adding batch output file: " + str(batch_index))
 
-        turbines = []
-        with open(batch_output_data, 'r', newline='', encoding="utf-8") as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader: 
-                turbines.append(row)
+            turbines = []
+            with open(batch_output_data, 'r', newline='', encoding="utf-8") as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader: 
+                    turbines.append(row)
 
-        if len(turbines) == 0: continue
-        
-        if not firstrowwritten:
-            with open(output_data, 'w', newline='') as csvfile:
-                fieldnames = turbines[0].keys()
+            if len(turbines) == 0: continue
+            
+            if not firstrowwritten:
+                with open(output_data, 'w', newline='') as csvfile:
+                    fieldnames = turbines[0].keys()
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                firstrowwritten = True
+
+            with open(output_data, 'a', newline='') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-            firstrowwritten = True
+                for turbine in turbines:
+                    writer.writerow(turbine)
 
-        with open(output_data, 'a', newline='') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            for turbine in turbines:
-                writer.writerow(turbine)
-
-        os.remove(batch_output_data)
+            os.remove(batch_output_data)
 
     # Run machine learning model on sampling grid
     machinelearningRunModelOnSamplingGrid()
