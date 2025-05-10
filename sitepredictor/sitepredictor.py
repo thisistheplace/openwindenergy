@@ -55,6 +55,7 @@ import h2o
 import pandas as pd
 import numpy as np
 import geopandas as gpd
+import multiprocessing
 from multiprocessing import Pool
 from rasterio.transform import from_origin
 from datetime import datetime
@@ -127,7 +128,7 @@ SAMPLING_GRID                       = "sitepredictor__sampling_" + str(RASTER_RE
 BATCH_SAMPLING_GRID                 = "sitepredictor__batchsampling_" + str(RASTER_RESOLUTION) + "_m"
 TEST_SAMPLING_GRID_SIZE             = 16000
 QUIET_MODE                          = True
-RASTER_OUTPUT_FOLDER                = "/Volumes/A002/Distance_Rasters/rasters/"
+RASTER_OUTPUT_FOLDER                = "/Volumes/A002/Distance_Rasters/rasters_new/"
 GEOCODE_POSITION_LOOKUP             = {}
 COUNCIL_POSITION_LOOKUP             = {}
 CENSUS_CACHE                        = {}
@@ -384,7 +385,7 @@ MAXIMUM_DISTANCE_LINE               = 50
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)-2s] %(message)s',
+    format='%(asctime)s - %(processName)s - [%(levelname)-2s] %(message)s',
     handlers=[
         logging.FileHandler(LOG_SINGLE_PASS),
         logging.FileHandler("{0}/{1}.log".format(WORKING_FOLDER, datetime.today().strftime('%Y-%m-%d'))),
@@ -440,6 +441,7 @@ def LogMessage(logtext):
     Logs message to console with timestamp
     """
 
+    logger = multiprocessing.get_logger()
     logging.info(logtext)
 
 def LogStage(logstage):
@@ -454,6 +456,7 @@ def LogError(logtext):
     Logs error message to console with timestamp
     """
 
+    logger = multiprocessing.get_logger()
     logging.error("*** ERROR *** " + logtext)
 
 def attemptDownloadUntilSuccess(url, file_path):
@@ -591,7 +594,6 @@ def getElevation(position):
     px, py = gdal.ApplyGeoTransform(gt_inv, mapx, mapy)
     py = int(py)
     px = int(px)
-    # print(raster_proj, position['lng'], position['lat'], px, py)
     ds = gdal.OpenEx(TERRAIN_FILE)
     elevation_value = ds.ReadAsArray(px, py, 1, 1)
     ds = None
@@ -772,6 +774,7 @@ def getDistanceRasterPath(table):
 
     return RASTER_OUTPUT_FOLDER + 'distance__' + str(RASTER_RESOLUTION) + '_m_resolution__' + table + '.tif'
 
+
 def createDistanceRaster(input, output, batch_index, batch_grid_spacing):
     """
     Creates distance raster from feature raster
@@ -781,72 +784,75 @@ def createDistanceRaster(input, output, batch_index, batch_grid_spacing):
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
     global CLIPPING_PATH, RASTER_OUTPUT_FOLDER
 
-    inverted_file = input.replace('.tif', '__inverted.tif')
+    if not isfile(output):
 
-    LogMessage("Creating inversion of original feature: " + basename(inverted_file))
+        inverted_file = input.replace('.tif', '__inverted.tif')
 
-    runSubprocess([ "gdal_calc", \
-                    "-A", input, \
-                    "--outfile=" + inverted_file, \
-                    '--calc="(1*(A==-9999))+(-9999*(A==1))"', \
-                    "--hideNoData", \
-                    "--NoDataValue=-9999"])
+        LogMessage("Creating inversion of original feature: " + basename(inverted_file))
 
-    original_distance_file = RASTER_OUTPUT_FOLDER + basename(input).replace('.tif', '') + '__distance.tif'
-    inverted_distance_file = RASTER_OUTPUT_FOLDER + basename(inverted_file).replace('.tif', '') + '__distance.tif'
+        runSubprocess([ "gdal_calc", \
+                        "-A", input, \
+                        "--outfile=" + inverted_file, \
+                        '--calc="(1*(A==-9999))+(-9999*(A==1))"', \
+                        "--hideNoData", \
+                        "--NoDataValue=-9999"])
 
-    if isfile(original_distance_file): os.remove(original_distance_file)
-    if isfile(inverted_distance_file): os.remove(inverted_distance_file)
+        original_distance_file = RASTER_OUTPUT_FOLDER + basename(input).replace('.tif', '') + '__distance.tif'
+        inverted_distance_file = RASTER_OUTPUT_FOLDER + basename(inverted_file).replace('.tif', '') + '__distance.tif'
 
-    LogMessage("Creating distance raster from: " + basename(input))
+        if isfile(original_distance_file): os.remove(original_distance_file)
+        if isfile(inverted_distance_file): os.remove(inverted_distance_file)
 
-    runSubprocess([ "gdal_proximity.py", \
-                    input, original_distance_file, \
-                    "-values", "1", \
-                    "-distunits", "GEO"])
+        LogMessage("Creating distance raster from: " + basename(input))
 
-    if isfile(input): os.remove(input)
+        runSubprocess([ "gdal_proximity.py", \
+                        input, original_distance_file, \
+                        "-values", "1", \
+                        "-distunits", "GEO"])
 
-    LogMessage("Creating distance raster from: " + basename(inverted_file))
+        if isfile(input): os.remove(input)
 
-    runSubprocess([ "gdal_proximity.py", \
-                    inverted_file, inverted_distance_file, \
-                    "-values", "1", \
-                    "-distunits", "GEO"])
+        LogMessage("Creating distance raster from: " + basename(inverted_file))
 
-    if isfile(inverted_file): os.remove(inverted_file)
+        runSubprocess([ "gdal_proximity.py", \
+                        inverted_file, inverted_distance_file, \
+                        "-values", "1", \
+                        "-distunits", "GEO"])
 
-    LogMessage("Creating composite distance raster from: " + basename(original_distance_file) + ' + ' + basename(inverted_distance_file))
+        if isfile(inverted_file): os.remove(inverted_file)
 
-    runSubprocess([ "gdal_calc", \
-                    "-A", original_distance_file, \
-                    "-B", inverted_distance_file, \
-                    "--outfile=" + output, \
-                    '--calc="(A-B)"', \
-                    "--NoDataValue=-9999"])
+        LogMessage("Creating composite distance raster from: " + basename(original_distance_file) + ' + ' + basename(inverted_distance_file))
 
-    if isfile(original_distance_file): os.remove(original_distance_file)
-    if isfile(inverted_distance_file): os.remove(inverted_distance_file)
+        runSubprocess([ "gdal_calc", \
+                        "-A", original_distance_file, \
+                        "-B", inverted_distance_file, \
+                        "--outfile=" + output, \
+                        '--calc="(A-B)"', \
+                        "--NoDataValue=-9999"])
 
+        if isfile(original_distance_file): os.remove(original_distance_file)
+        if isfile(inverted_distance_file): os.remove(inverted_distance_file)
+
+    # If processing batches, clip core distance raster to batch cell and save as batch-specific raster 
     if batch_index is not None:
 
         batch_output = buildBatchRasterFilename(output, batch_index, batch_grid_spacing)
         batch_clipping = buildBatchRasterClippingFilename(batch_index, batch_grid_spacing)
 
         if not isfile(batch_clipping):
-            LogMessage("Exporting batch clipping path")
+            LogMessage("Exporting batch clipping path at: " + batch_clipping)
 
-            batch_grid_table = buildBatchGridTableName(batch_index, batch_grid_spacing)
+            batch_cell_table = buildBatchCellTableName(batch_index, batch_grid_spacing)
 
             runSubprocess([ "ogr2ogr", \
                             "-f", "GeoJSON", \
                             batch_clipping, \
                             'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
-                            "--config", "OGR_PG_ENABLE_METADATA=NO", \
                             "-dialect", "sqlite", \
                             "-sql", \
-                            "SELECT ST_Buffer(geom, " + str(RASTER_RESOLUTION) + ") geometry FROM '" + batch_grid_table + "' WHERE id=" + str(batch_index), \
-                            "-nln", "batch_clipping" ])
+                            "SELECT ST_Buffer(geom, " + str(RASTER_RESOLUTION) + ") geometry FROM " + batch_cell_table, \
+                            "-nln", "batch_clipping",
+                            "--config", "OGR_PG_ENABLE_METADATA", "NO" ])
 
         LogMessage("Clipping raster to clipping path: " + output)
 
@@ -1141,7 +1147,6 @@ def postgisAddProportionalFields(table):
     for field in ['total', 'geom', 'ogc_fid', 'date', 'year', 'geography', 'geo_code']:
         if field in fields: fields.remove(field)
 
-    # print(json.dumps(fields, indent=4))
     for field in fields:
         if '__prop' in field: continue
         proportional_field = field + '__prop'
@@ -1657,7 +1662,9 @@ def buildBatchRasterClippingFilename(batch_index, batch_grid_spacing):
     Builds batch raster filename
     """
 
-    return 'clipping_batch_' + str(batch_index) + '_' + str(batch_grid_spacing) + 'm.geojson'
+    if not isdir('clipping'): makeFolder('clipping')
+
+    return 'clipping/clipping_batch_' + str(batch_index) + '_' + str(batch_grid_spacing) + 'm.geojson'
 
     
 # ***********************************************************
@@ -3404,18 +3411,28 @@ def createDistanceRasters(tables, batch_index, batch_grid_spacing):
 
         feature_raster = RASTER_OUTPUT_FOLDER + table + '.tif'
         distance_raster = getDistanceRasterPath(table)
-        rebuild_raster = False
 
         if batch_index is None: 
-            if not isfile(distance_raster): rebuild_raster = True
+            if not isfile(distance_raster): 
+                createFeaturesRaster(table, feature_raster)
+                createDistanceRaster(feature_raster, distance_raster, batch_index, batch_grid_spacing)
         else:
             batch_distance_raster = buildBatchRasterFilename(distance_raster, batch_index, batch_grid_spacing)
-            if not isfile(batch_distance_raster): rebuild_raster = True
+            if not isfile(batch_distance_raster): 
+                createDistanceRaster(feature_raster, distance_raster, batch_index, batch_grid_spacing)
 
-        if rebuild_raster: 
-            if isfile(feature_raster): os.remove(feature_raster)
-            createFeaturesRaster(table, feature_raster)
-            createDistanceRaster(feature_raster, distance_raster, batch_index, batch_grid_spacing)
+        if isfile(feature_raster): os.remove(feature_raster)
+
+def deleteDistanceRasters(tables, batch_index, batch_grid_spacing):
+    """
+    Deletes distance rasters for tables
+    """
+
+    for table in tables:
+
+        distance_raster = getDistanceRasterPath(table)
+        distance_batch_output = buildBatchRasterFilename(distance_raster, batch_index, batch_grid_spacing)
+        if isfile(distance_batch_output): os.remove(distance_batch_output)
 
 def createSpacedGrid(position_start, spacing_metres, num_rows, num_cols):
     """
@@ -3511,7 +3528,7 @@ def createSamplingGridData(batch_values):
         batch_index, batch_grid_spacing = batch_values[0], batch_values[1]
 
     LogMessage("========================================")
-    LogMessage("== Starting batch: " + str(batch_index))
+    LogMessage("== Starting batch: " + str(batch_index) + " " + str(batch_grid_spacing))
     LogMessage("========================================")
 
     # ************************************************************
@@ -3614,73 +3631,73 @@ def createSamplingGridData(batch_values):
         LogStage("Step 1")
 
         turbine_lnglat = {'lng': sample_grid[index]['lng'], 'lat': sample_grid[index]['lat']}
-        # turbine_xy = {'x': sample_grid[index]['easting'], 'y': sample_grid[index]['northing']}
-        # turbine['turbine_country'] = getCountry(turbine_lnglat)
-        # if turbine['turbine_country'] is None: 
-        #     LogMessage("No country found for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
-        #     continue
+        turbine_xy = {'x': sample_grid[index]['easting'], 'y': sample_grid[index]['northing']}
+        turbine['turbine_country'] = getCountry(turbine_lnglat)
+        if turbine['turbine_country'] is None: 
+            LogMessage("No country found for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
+            continue
 
-        # LogStage("Step 2")
+        LogStage("Step 2")
 
-        # turbine['turbine_elevation'] = getElevation(turbine_lnglat)[0]
+        turbine['turbine_elevation'] = getElevation(turbine_lnglat)[0]
 
-        # LogStage("Step 3")
+        LogStage("Step 3")
 
-        # turbine['turbine_grid_coordinates_srs'] = 'EPSG:27700'
-        # turbine['turbine_grid_coordinates_easting'] = sample_grid[index]['easting']
-        # turbine['turbine_grid_coordinates_northing'] = sample_grid[index]['northing']
+        turbine['turbine_grid_coordinates_srs'] = 'EPSG:27700'
+        turbine['turbine_grid_coordinates_easting'] = sample_grid[index]['easting']
+        turbine['turbine_grid_coordinates_northing'] = sample_grid[index]['northing']
         turbine['turbine_lnglat_lng'] = turbine_lnglat['lng']
         turbine['turbine_lnglat_lat'] = turbine_lnglat['lat']
-        # turbine['windspeed'] = getWindSpeed(turbine_lnglat)
-        # turbine['project_size'] = 1
+        turbine['windspeed'] = getWindSpeed(turbine_lnglat)
+        turbine['project_size'] = 1
 
-        # LogStage("Step 4")
+        LogStage("Step 4")
 
-        # census = getCensus(turbine_lnglat)
-        # if census is None:
-        #     LogMessage("No census data for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
-        #     continue
+        census = getCensus(turbine_lnglat)
+        if census is None:
+            LogMessage("No census data for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
+            continue
 
-        # LogStage("Step 5")
+        LogStage("Step 5")
 
-        # for census_key in census.keys(): turbine[census_key] = census[census_key]
+        for census_key in census.keys(): turbine[census_key] = census[census_key]
 
-        # political = {
-        #     'political_total': None,
-        #     'political_con': None,
-        #     'political_lab': None,
-        #     'political_ld': None,
-        #     'political_other': None,
-        #     'political_nat': None,
-        #     'political_proportion_con': None,
-        #     'political_proportion_lab': None,
-        #     'political_proportion_ld': None,
-        #     'political_proportion_other': None,
-        #     'political_proportion_nat': None,
-        # }
+        political = {
+            'political_total': None,
+            'political_con': None,
+            'political_lab': None,
+            'political_ld': None,
+            'political_other': None,
+            'political_nat': None,
+            'political_proportion_con': None,
+            'political_proportion_lab': None,
+            'political_proportion_ld': None,
+            'political_proportion_other': None,
+            'political_proportion_nat': None,
+        }
 
-        # year = str(int(datetime.today().strftime('%Y')) - 1)
-        # political = getPolitical(turbine_lnglat, year)
+        year = str(int(datetime.today().strftime('%Y')) - 1)
+        political = getPolitical(turbine_lnglat, year)
 
-        # if political is None:
-        #     LogMessage("No political data for point: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']) + " so skipping")
-        #     continue
+        if political is None:
+            LogMessage("No political data for point: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']) + " so skipping")
+            continue
 
-        # LogStage("Step 6")
+        LogStage("Step 6")
 
-        # for political_key in political.keys(): turbine[political_key] = political[political_key]
+        for political_key in political.keys(): turbine[political_key] = political[political_key]
 
-        # for distance_range in distance_ranges:
-        #     radiuspoints                                                        = runRadiusSearch(turbine_xy, 1000 * distance_range, None)
-        #     turbine['count__operational_within_' + str(distance_range)+'km']    = getOperationalBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
-        #     turbine['count__approved_within_' + str(distance_range)+'km']       = getApprovedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
-        #     turbine['count__applied_within_' + str(distance_range)+'km']        = getAppliedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
-        #     turbine['count__rejected_within_' + str(distance_range)+'km']       = getRejectedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+        for distance_range in distance_ranges:
+            radiuspoints                                                        = runRadiusSearch(turbine_xy, 1000 * distance_range, None)
+            turbine['count__operational_within_' + str(distance_range)+'km']    = getOperationalBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+            turbine['count__approved_within_' + str(distance_range)+'km']       = getApprovedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+            turbine['count__applied_within_' + str(distance_range)+'km']        = getAppliedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
+            turbine['count__rejected_within_' + str(distance_range)+'km']       = getRejectedBeforeDateWithinDistance(radiuspoints, turbine['project_date_end'])
 
-        # LogStage("Step 7")
+        LogStage("Step 7")
 
-        # if batch_index is None:
-        #     for distance_key in distances[index].keys(): turbine[distance_key] = distances[index][distance_key]
+        if batch_index is None:
+            for distance_key in distances[index].keys(): turbine[distance_key] = distances[index][distance_key]
 
         if not firstrowwritten:
             with open(output_data, 'w', newline='') as csvfile:
@@ -3695,61 +3712,62 @@ def createSamplingGridData(batch_values):
 
         index += 1
 
-        # # ***** FOR MULTIPROCESSING TESTING *****
-        # # break after a small sample
-        # if index > 10: break
-
     # For batched processing, add distances from batch rasters to turbine positions after finishing main processing
     if batch_index is not None:
 
-        for table in tables_to_test:
-            table_name_for_output = table.replace('__pro__27700', '')
-            distance_column = 'distance__' + table_name_for_output
+        if isfile(output_data):
+            for table in tables_to_test:
+                table_name_for_output = table.replace('__pro__27700', '')
+                distance_column = 'distance__' + table_name_for_output
 
-            turbines, firstrowwritten = [], False
-            with open(output_data, 'r', newline='', encoding="utf-8") as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader: turbines.append(row)
+                turbines, firstrowwritten = [], False
+                with open(output_data, 'r', newline='', encoding="utf-8") as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader: turbines.append(row)
 
-            if distance_column in turbines[0]: 
-                LogMessage("Turbine output data already has distances for: " + table_name_for_output)
-                continue
+                if distance_column in turbines[0]: 
+                    LogMessage("Turbine output data already has distances for: " + table_name_for_output)
+                    continue
 
-            LogMessage("Getting distances from distance raster for: " + table)
+                LogMessage("Getting distances from distance raster for: " + table)
 
-            distance_raster = getDistanceRasterPath(table)
-            batch_distance_raster = buildBatchRasterFilename(distance_raster, batch_index, batch_grid_spacing)
-            raster = rasterio.open(batch_distance_raster)
+                distance_raster = getDistanceRasterPath(table)
+                batch_distance_raster = buildBatchRasterFilename(distance_raster, batch_index, batch_grid_spacing)
+                raster = rasterio.open(batch_distance_raster)
 
-            # Output results to temporary file and only copy over once processing has completed
-            temp_data = 'temp.csv'
-            if isfile(temp_data): os.remove(temp_data)
+                # Output results to temporary file and only copy over once processing has completed
+                temp_data = str(batch_index) + '_temp.csv'
+                if isfile(temp_data): os.remove(temp_data)
+                firstrowwritten = False
 
-            for turbine in turbines:
-                metric_point = (turbine['turbine_grid_coordinates_easting'], turbine['turbine_grid_coordinates_northing'])
-                iterator = raster.sample([metric_point])
-                for iterator_item in iterator: distance = iterator_item[0] 
-                turbine[distance_column] = float(distance)
+                for turbine in turbines:
+                    metric_point = (turbine['turbine_grid_coordinates_easting'], turbine['turbine_grid_coordinates_northing'])
+                    iterator = raster.sample([metric_point])
+                    for iterator_item in iterator: distance = iterator_item[0] 
+                    turbine[distance_column] = float(distance)
 
-                if not firstrowwritten:
-                    with open(temp_data, 'w', newline='') as csvfile:
-                        fieldnames = turbine.keys()
+                    if not firstrowwritten:
+                        with open(temp_data, 'w', newline='') as csvfile:
+                            fieldnames = turbine.keys()
+                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                            writer.writeheader()
+                        firstrowwritten = True
+
+                    with open(temp_data, 'a', newline='') as csvfile:
                         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                        writer.writeheader()
-                    firstrowwritten = True
+                        writer.writerow(turbine)
 
-                with open(temp_data, 'a', newline='') as csvfile:
-                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                    writer.writerow(turbine)
-
-            raster.close()
-            shutil.copy(temp_data, output_data)
+                raster.close()
+                shutil.copy(temp_data, output_data)
+                if isfile(temp_data): os.remove(temp_data)
 
     if (batch_index is not None) and (batch_grid_spacing is not None):
         batch_sampling_grid = buildBatchSamplingGridTableName(batch_index, batch_grid_spacing)
         if postgisCheckTableExists(batch_sampling_grid): 
             LogMessage("Dropping batch sampling grid table: " + batch_sampling_grid)
             postgisDropTable(batch_sampling_grid)
+
+        deleteDistanceRasters(tables_to_test, batch_index, batch_grid_spacing)
 
     LogMessage("========================================")
     LogMessage("== Ending batch: " + str(batch_index))
@@ -3927,6 +3945,23 @@ def createAllTurbinesData():
 
         index += 1
 
+def initializeDistanceRasters(batch_grid_spacing):
+    """
+    Initializes distance rasters, regardless of whether batching or not
+    """
+
+    # Get list of tables to run distance testing on    
+    tables_to_test_unprojected = removeNonEssentialTablesForDistance(postgisGetUKBasicProcessedTables())
+
+    # Creates reprojected version of all testing tables to improve performance
+    tables_to_test = []
+    for table in tables_to_test_unprojected:
+        tables_to_test.append(createTransformedTable(table))
+
+    tables_to_test = removeNonEssentialTablesForDistance(tables_to_test)
+
+    createDistanceRasters(tables_to_test, None, batch_grid_spacing)
+
 def runSitePredictor(batch_grid_spacing):
     """
     Runs entire site predictor application
@@ -3940,6 +3975,7 @@ def runSitePredictor(batch_grid_spacing):
     # Michael Harper, Ben Anderson, Patrick A.B. James, AbuBakr S. Bahaj (2019)
     # https://www.sciencedirect.com/science/article/pii/S0301421519300023
 
+    global OUTPUT_DATA_SAMPLEGRID
     # createAllTurbinesData()
 
     # Build machine learning model using failed/successful wind turbine features
@@ -3947,16 +3983,69 @@ def runSitePredictor(batch_grid_spacing):
     # machinelearningBuildModel()
 
     # Create batch grid for multiprocessing
+    if batch_grid_spacing is None: batch_grid_spacing = 400000
+
     number_batches = createBatchGrid(batch_grid_spacing)
-    LogMessage("Batch grid spacing set to " + str(batch_grid_spacing) + "metres, running multiprocessing with " + str(number_batches) + " batches")
+    LogMessage("Batch grid spacing set to " + str(batch_grid_spacing) + " metres, running multiprocessing with " + str(number_batches) + " batches")
+
+    # Initialize core distance rasters that will be used by all batches
+    initializeDistanceRasters(batch_grid_spacing)
+
+    multiprocessing_batch_values = [[batch_index, batch_grid_spacing] for batch_index in range(1, number_batches + 1)]
+
+    # Run without multiprocessing, ie. in sequence
+    # for item in multiprocessing_batch_values:
+    #     createSamplingGridData(item)
+
+    LogMessage("************************************************")
+    LogMessage("********** STARTING MULTIPROCESSING ************")
+    LogMessage("************************************************")
 
     # Run multiprocessing pool
-    multiprocessing_batch_values = [[batch_index, batch_grid_spacing] for batch_index in range(1, number_batches + 1)]
     with Pool(None) as p:
         # Populates sampling grid (spaced at RASTER_RESOLUTION metres) with same
         # features data - where possible - as all turbines, above. 
         # Year used is (CURRENTYEAR - 1), ie. attempting to predict probability-of-success for now
         p.map(createSamplingGridData, multiprocessing_batch_values)
+
+    LogMessage("************************************************")
+    LogMessage("*********** ENDING MULTIPROCESSING *************")
+    LogMessage("************************************************")
+
+    LogMessage("Consolidating batch output files...")
+
+    output_data = OUTPUT_DATA_SAMPLEGRID
+    if isfile(output_data): os.remove(output_data)
+    firstrowwritten = False
+
+    for batch_item in multiprocessing_batch_values:
+        batch_index, batch_grid_spacing = batch_item[0], batch_item[1]
+        batch_output_data = buildBatchGridOutputData(OUTPUT_DATA_SAMPLEGRID, batch_index, batch_grid_spacing)
+        if not isfile(batch_output_data): continue
+
+        LogMessage("Adding batch output file: " + str(batch_index))
+
+        turbines = []
+        with open(batch_output_data, 'r', newline='', encoding="utf-8") as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader: 
+                turbines.append(row)
+
+        if len(turbines) == 0: continue
+        
+        if not firstrowwritten:
+            with open(output_data, 'w', newline='') as csvfile:
+                fieldnames = turbines[0].keys()
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+            firstrowwritten = True
+
+        with open(output_data, 'a', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            for turbine in turbines:
+                writer.writerow(turbine)
+
+        os.remove(batch_output_data)
 
     # ******** TO DO **********
     # *** Consolidate all final batch files into single file
@@ -3972,11 +4061,18 @@ def runSitePredictor(batch_grid_spacing):
 # ***********************************************************
 # ***********************************************************
 
-batch_grid_spacing = None
+def main():
+    """
+    Main function - put here to allow multiprocessing to work
+    """
 
-if len(sys.argv) > 1:
-    batch_grid_spacing = sys.argv[1]
-    LogMessage("Running batch processing with batch_grid_spacing = " + str(batch_grid_spacing))
+    batch_grid_spacing = None
 
-runSitePredictor(batch_grid_spacing)
+    if len(sys.argv) > 1:
+        batch_grid_spacing = sys.argv[1]
+        LogMessage("Running batch processing with batch_grid_spacing = " + str(batch_grid_spacing))
 
+    runSitePredictor(batch_grid_spacing)
+
+if __name__ == "__main__":
+    main()

@@ -3088,38 +3088,39 @@ def installTileserverFonts():
 
     else:
 
+        # Server build clones fonts from https://github.com/open-wind/openmaptiles-fonts.git
+        if isdir(tileserver_font_folder): return True
+
         # Download tileserver fonts
 
-        if not isdir(tileserver_font_folder):
+        if not isdir(basename(TILESERVER_FONTS_GITHUB)):
 
-            if not isdir(basename(TILESERVER_FONTS_GITHUB)):
+            LogMessage("Downloading tileserver fonts")
 
-                LogMessage("Downloading tileserver fonts")
+            inputs = runSubprocess(["git", "clone", TILESERVER_FONTS_GITHUB])
 
-                inputs = runSubprocess(["git", "clone", TILESERVER_FONTS_GITHUB])
+        working_dir = os.getcwd()
+        os.chdir(basename(TILESERVER_FONTS_GITHUB))
 
-            working_dir = os.getcwd()
-            os.chdir(basename(TILESERVER_FONTS_GITHUB))
+        LogMessage("Generating PBF fonts")
 
-            LogMessage("Generating PBF fonts")
-
-            if not runSubprocessReturnBoolean(["npm", "install"]):
-                os.chdir(working_dir)
-                return False
-
-            if not runSubprocessReturnBoolean(["node", "./generate.js"]):
-                os.chdir(working_dir)
-                return False
-
+        if not runSubprocessReturnBoolean(["npm", "install"]):
             os.chdir(working_dir)
+            return False
 
-            LogMessage("Copying PBF fonts to tileserver folder")
+        if not runSubprocessReturnBoolean(["node", "./generate.js"]):
+            os.chdir(working_dir)
+            return False
 
-            tileserver_font_folder_src = basename(TILESERVER_FONTS_GITHUB) + '/_output'
+        os.chdir(working_dir)
 
-            shutil.copytree(tileserver_font_folder_src, tileserver_font_folder)
+        LogMessage("Copying PBF fonts to tileserver folder")
 
-            return True
+        tileserver_font_folder_src = basename(TILESERVER_FONTS_GITHUB) + '/_output'
+
+        shutil.copytree(tileserver_font_folder_src, tileserver_font_folder)
+
+        return True
 
 def buildTileserverFiles():
     """
