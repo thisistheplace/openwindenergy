@@ -3940,7 +3940,7 @@ def runSitePredictor(batch_grid_spacing):
     # Michael Harper, Ben Anderson, Patrick A.B. James, AbuBakr S. Bahaj (2019)
     # https://www.sciencedirect.com/science/article/pii/S0301421519300023
 
-    createAllTurbinesData()
+    # createAllTurbinesData()
 
     # Build machine learning model using failed/successful wind turbine features
 
