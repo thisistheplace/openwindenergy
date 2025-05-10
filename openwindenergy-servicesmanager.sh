@@ -5,12 +5,32 @@
 while true
     do
         sleep 1
+
+        if [ -f "/usr/src/openwindenergy/DOMAIN" ]; then
+            . /usr/src/openwindenergy/DOMAIN
+            sed -i "s/.*ServerName.*/    ServerName $DOMAIN/" /etc/apache2/sites-available/001-default-build-post.conf
+            sed -i "s/.*ServerName.*/    ServerName $DOMAIN/" /etc/apache2/sites-available/002-default-build-pre.conf
+            sudo certbot --apache --non-interactive --agree-tos --email info@${DOMAIN} --domains ${DOMAIN}
+            cp /usr/src/openwindenergy/DOMAIN /usr/src/openwindenergy/DOMAINPERMANENT
+            rm /usr/src/openwindenergy/DOMAIN
+        fi
+
         if [ -f "/usr/src/openwindenergy/RESTARTSERVICES" ]; then
             echo "Restarting tileserver.service and apache2 with post-build conf"
             sudo /usr/bin/systemctl restart tileserver.service
             sudo a2ensite 001-default-build-post.conf
             sudo a2dissite 002-default-build-pre.conf
             sudo /usr/sbin/apache2ctl restart
+
+            if [ -f "/usr/src/openwindenergy/DOMAINPERMANENT" ]; then
+                . /usr/src/openwindenergy/DOMAINPERMANENT
+                sed -i "s/.*ServerName.*/    ServerName $DOMAIN/" /etc/apache2/sites-available/001-default-build-post.conf
+                sed -i "s/.*ServerName.*/    ServerName $DOMAIN/" /etc/apache2/sites-available/002-default-build-pre.conf
+                sudo certbot --apache --non-interactive --agree-tos --email info@${DOMAIN} --domains ${DOMAIN}
+                sudo /usr/sbin/apache2ctl restart
+                rm /usr/src/openwindenergy/DOMAINPERMANENT
+            fi
+
             rm /usr/src/openwindenergy/RESTARTSERVICES
         fi
 

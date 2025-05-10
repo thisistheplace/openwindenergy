@@ -33,6 +33,7 @@
 import sys, os
 sys.path.insert(0, os.getcwd())
 
+import socket
 import validators
 import shutil
 import secrets
@@ -42,6 +43,7 @@ import time
 import os
 import psycopg2
 import zipfile
+from requests import get
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -338,8 +340,6 @@ def processlogin():
 
     session['logged_in'] = True
 
-    print(request.cookies.get('session'))
-
     return redirect(url_for('settings'))
 
 @app.route("/settings") 
@@ -560,6 +560,42 @@ def processingstop():
     setProcessing(False)
 
     return redirect(url_for('settings'))
+
+@app.route("/setdomain")
+def setdomain():
+    """
+    Show set domain name page
+    """
+
+    if not isLoggedIn(): return redirect(url_for('login'))
+
+    return render_template("setdomain.html", error=None) 
+
+@app.route("/processdomain", methods=['POST'])
+def processdomain():
+    """
+    Process submitted domain name
+    """
+
+    if not isLoggedIn(): return redirect(url_for('login'))
+
+    domain = request.form.get('domain', '').strip()
+    print(domain)
+    try:
+        domain_ip = socket.gethostbyname(domain).strip()
+    except:
+        domain_ip = None
+    visible_ip = get('https://ipinfo.io/ip')
+
+    if domain_ip != visible_ip:
+        return render_template("setdomain.html", error=domain) 
+
+    with open('/usr/src/openwindenergy/DOMAIN', 'w') as file: file.write("DOMAIN=" + domain)
+    while True:
+        if not isfile('/usr/src/openwindenergy/DOMAIN'): break
+        time.sleep(0.5)
+
+    return redirect('https://' + domain + '/admin')
 
 # ***********************************************************
 # ***********************************************************
