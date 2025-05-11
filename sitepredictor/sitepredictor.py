@@ -148,7 +148,7 @@ ML_STATUS_FAILURE                   = ['Application Refused', 'Abandoned', 'Appe
 ML_STATUS_PENDING                   = ['Revised', 'Application Submitted', 'Appeal Lodged', 'No Application Required']
 ALLTURBINES_DF                      = None
 CKAN_USER_AGENT                     = 'ckanapi/1.0 (+https://openwind.energy)'
-LOG_SINGLE_PASS                     = WORKING_FOLDER + 'log.txt'
+LOG_SINGLE_PASS                     = WORKING_FOLDER + '../log.txt'
 
 # We try and include as many columns as possible to ML 
 # but there are some columns that are clearly irrelevant to prediction
