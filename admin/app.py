@@ -33,6 +33,7 @@
 import sys, os
 sys.path.insert(0, os.getcwd())
 
+import uuid
 import socket
 import validators
 import shutil
@@ -68,6 +69,7 @@ PROCESSING_COMMAND_LINE_EXTERNAL    = './build-cli.sh'
 PROCESSING_COMMAND_LINE_SERVER      = '../build-server.sh'
 PROCESSING_STATE_FILE               = '../PROCESSING'
 PROCESSING_START                    = '../PROCESSINGSTART'
+CERTBOT_LOG                         = '../log-certbot.txt'
 
 app = Flask(__name__)
 application = app
@@ -595,7 +597,34 @@ def processdomain():
 
     with open('/usr/src/openwindenergy/DOMAIN', 'w') as file: file.write("DOMAIN=" + domain)
 
-    return render_template("redirect.html", domain=('https://' + domain + '/admin'))
+    return redirect('/redirectdomain?id=' + str(uuid.uuid4()) + '&domain=' + domain)
+
+@app.route("/redirectdomain", methods=['GET'])
+def redirectdomain():
+    """
+    Creates redirect page that shows result of Certbot
+    If certbot log includes 'Successfully deployed', redirect to new SSL domain
+    """
+
+    global CERTBOT_LOG
+
+    if not isLoggedIn(): return redirect(url_for('login'))
+
+    certbot_result, certbot_success = '', False
+    if isfile(CERTBOT_LOG):
+        with open(CERTBOT_LOG, "r", encoding='utf-8') as text_file: certbot_result = text_file.read().strip()
+
+    if 'Successfully deployed certificate' in certbot_result: certbot_success = True
+
+    domain = request.args.get('domain', '').strip()
+    redirect_url = '/redirectdomain?id=' + str(uuid.uuid4())
+    if (domain is not None) and (domain != ''): 
+        if certbot_success: 
+            redirect_url = 'https://' + domain + '/admin'
+        else:
+            redirect_url += '&domain=' + domain
+
+    return render_template("redirectdomain.html", domain=domain, certbot_success=certbot_success, certbot_result=certbot_result, redirect_url=redirect_url)
 
 # ***********************************************************
 # ***********************************************************
