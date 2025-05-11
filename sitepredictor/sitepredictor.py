@@ -1164,7 +1164,7 @@ def postgisGetBasicProcessedTables():
 
     global POSTGRES_DB, CUSTOM_CONFIGURATION_PREFIX
 
-    custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace('_', '\_')
+    custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace(r'_', r'\_')
 
     table_list = postgisGetResults("""
     SELECT tables.table_name
@@ -1195,7 +1195,7 @@ def postgisGetBasicUnprocessedTables():
 
     global POSTGRES_DB, CUSTOM_CONFIGURATION_PREFIX
 
-    custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace('_', '\_')
+    custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace(r'_', r'\_')
 
     basic_processed = postgisGetBasicProcessedTables()
     basic_unprocessed = postgisGetResults("""
@@ -1236,7 +1236,7 @@ def postgisGetUKBasicUnprocessedTables():
 
     global POSTGRES_DB, CUSTOM_CONFIGURATION_PREFIX
 
-    custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace('_', '\_')
+    custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace(r'_', r'\_')
 
     basic_processed = postgisGetBasicProcessedTables()
     basic_unprocessed = postgisGetResults("""
@@ -1275,7 +1275,7 @@ def postgisGetUKBasicProcessedTables():
 
     global POSTGRES_DB, CUSTOM_CONFIGURATION_PREFIX
 
-    custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace('_', '\_')
+    custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace(r'_', r'\_')
 
     table_list = postgisGetResults("""
     SELECT tables.table_name

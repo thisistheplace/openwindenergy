@@ -476,7 +476,7 @@ def postgisGetAllTables():
     Gets list of all tables in database
     """
 
-    return postgisGetResults("""
+    return postgisGetResults(r"""
     SELECT tables.table_name
     FROM information_schema.tables
     WHERE 
@@ -494,9 +494,9 @@ def postgisGetCustomTables():
 
     global CUSTOM_CONFIGURATION_TABLE_PREFIX
 
-    custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_TABLE_PREFIX.replace('_', '\_')
+    custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_TABLE_PREFIX.replace(r'_', r'\_')
 
-    return postgisGetResults("""
+    return postgisGetResults(r"""
     SELECT tables.table_name
     FROM information_schema.tables
     WHERE 
@@ -504,7 +504,7 @@ def postgisGetCustomTables():
     table_schema='public' AND 
     table_type='BASE TABLE' AND
     table_name NOT IN ('spatial_ref_sys') AND 
-    table_name LIKE '""" + custom_configuration_prefix_escape + """%%' 
+    table_name LIKE '""" + custom_configuration_prefix_escape + r"""%%' 
     ORDER BY table_name;
     """, (POSTGRES_DB, ))
 
@@ -518,7 +518,7 @@ def postgisGetDerivedTables():
     # Any 'pro'cessed
     # Any final layer 'tip_...'
 
-    return postgisGetResults("""
+    return postgisGetResults(r"""
     SELECT tables.table_name
     FROM information_schema.tables
     WHERE 
@@ -543,7 +543,7 @@ def postgisGetLegacyTables():
     # public_roads_a_and_b_roads_and_motorways__uk
     # tipheight_...
 
-    return postgisGetResults("""
+    return postgisGetResults(r"""
     SELECT tables.table_name
     FROM information_schema.tables
     WHERE 
@@ -562,7 +562,7 @@ def postgisGetAmalgamatedTables():
     Gets list of all amalgamated tables in database
     """
 
-    return postgisGetResults("""
+    return postgisGetResults(r"""
     SELECT tables.table_name
     FROM information_schema.tables
     WHERE 
@@ -2967,8 +2967,9 @@ def runProcessingOnDownloads(output_folder):
             shutil.copy(temp_gpkg, finallayer_file_gpkg)
             if isfile(temp_gpkg): os.remove(temp_gpkg)
 
-            # Copy to latest
-            shutil.copy(finallayer_file_gpkg, finallayer_latest_file_gpkg)
+        # Always copy to latest just to be safe
+        LogMessage("Copying final layer GPKG to: " + finallayer_latest_file_gpkg)
+        shutil.copy(finallayer_file_gpkg, finallayer_latest_file_gpkg)
 
     # Then use ogr2ogr without PostGIS to convert exported GPKG to other formats - GeoJSON and SHP
 

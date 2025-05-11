@@ -230,7 +230,7 @@ def createQGISFile():
 
     QgsApplication.setPrefixPath(QGIS_PREFIX_PATH, True)
 
-    QGISAPP = QgsApplication([], True)     
+    QGISAPP = QgsApplication([], True)
     QGISAPP.initQgis()
     project = QgsProject.instance()
     project_path = QFileInfo(QGIS_OUTPUT_FILE).absoluteFilePath()
