@@ -597,18 +597,24 @@ def processdomain():
 
     with open('/usr/src/openwindenergy/DOMAIN', 'w') as file: file.write("DOMAIN=" + domain)
 
-    return redirect('/redirectdomain?id=' + str(uuid.uuid4()) + '&domain=' + domain)
+    return redirect('http://' + visible_ip + '/redirectdomain?id=' + str(uuid.uuid4()) + '&domain=' + domain)
 
 @app.route("/redirectdomain", methods=['GET'])
 def redirectdomain():
     """
     Creates redirect page that shows result of Certbot
     If certbot log includes 'Successfully deployed', redirect to new SSL domain
+    Uses non-secure IP address just to be safe when domain1 -> domain2
     """
 
     global CERTBOT_LOG
 
     if not isLoggedIn(): return redirect(url_for('login'))
+
+    # Give openwindenergy-servicesmanager.sh enough time to remove previous log-certbot.txt
+    # Otherwise previously successful attempt will incorrectly appear as current success 
+    # openwindenergy-servicesmanager runs every 1s
+    time.sleep(4)
 
     certbot_result, certbot_success = '', False
     if isfile(CERTBOT_LOG):
@@ -616,8 +622,9 @@ def redirectdomain():
 
     if 'Successfully deployed certificate' in certbot_result: certbot_success = True
 
+    visible_ip = get('https://ipinfo.io/ip').text
     domain = request.args.get('domain', '').strip()
-    redirect_url = '/redirectdomain?id=' + str(uuid.uuid4())
+    redirect_url = 'http://' + visible_ip + '/redirectdomain?id=' + str(uuid.uuid4())
     if (domain is not None) and (domain != ''): 
         if certbot_success: 
             redirect_url = 'https://' + domain + '/admin'

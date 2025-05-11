@@ -13,10 +13,12 @@ while true
             sudo /usr/sbin/apache2ctl restart
             sudo rm /usr/src/openwindenergy/log-certbot.txt
             sudo certbot --apache --non-interactive --agree-tos --email info@${DOMAIN} --domains ${DOMAIN} | sudo tee /usr/src/openwindenergy/log-certbot.txt >/dev/null
-            sudo /usr/sbin/apache2ctl restart
-            sudo cp /usr/src/openwindenergy/DOMAIN /usr/src/openwindenergy/DOMAINACTIVE
+            if grep -q 'Successfully deployed certificate' /usr/src/openwindenergy/log-certbot.txt; then
+                sudo cp /usr/src/openwindenergy/DOMAIN /usr/src/openwindenergy/DOMAINACTIVE
+                sudo /usr/bin/systemctl restart tileserver.service
+                sudo /usr/sbin/apache2ctl restart
+            fi
             sudo rm /usr/src/openwindenergy/DOMAIN
-            sudo /usr/bin/systemctl restart tileserver.service
         fi
 
         if [ -f "/usr/src/openwindenergy/RESTARTSERVICES" ]; then
@@ -26,6 +28,7 @@ while true
             sudo a2dissite 002-default-build-pre.conf
             sudo /usr/sbin/apache2ctl restart
 
+            # Handle case where certbot was run on 002-default-build-pre.conf but build has now switched to 001-default-build-post.conf
             if [ -f "/usr/src/openwindenergy/DOMAINACTIVE" ]; then
                 if ! grep -q 'server-name' /etc/apache2/sites-available/001-default-build-post.conf; then
                     if ! grep -q 'letsencrypt' /etc/apache2/sites-available/001-default-build-post.conf; then
