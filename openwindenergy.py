@@ -354,8 +354,18 @@ def osmDownloadData():
     makeFolder(OSM_DOWNLOADS_FOLDER)
 
     if not isfile(OSM_DOWNLOADS_FOLDER + basename(OSM_MAIN_DOWNLOAD)):
+
         LogMessage("Downloading latest OSM data")
-        runSubprocess(["wget", OSM_MAIN_DOWNLOAD, "-O", OSM_DOWNLOADS_FOLDER + basename(OSM_MAIN_DOWNLOAD)])
+
+        # Download to temp file in case download interrupted for any reason, eg. user clicks 'Stop processing'
+
+        download_temp = OSM_DOWNLOADS_FOLDER + 'temp.pbf'
+        if isfile(download_temp): os.remove(download_temp)
+
+        runSubprocess(["wget", OSM_MAIN_DOWNLOAD, "-O", download_temp])
+
+        shutil.copy(download_temp, OSM_DOWNLOADS_FOLDER + basename(OSM_MAIN_DOWNLOAD))
+        if isfile(download_temp): os.remove(download_temp)
 
     LogMessage("Checking all files required for OSM tilemaker...")
 
