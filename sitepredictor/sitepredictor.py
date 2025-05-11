@@ -85,7 +85,8 @@ OUTPUT_FOLDER                       = WORKING_FOLDER + 'output/'
 OSM_MAIN_DOWNLOAD                   = 'https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf'
 OSM_CONFIG_FOLDER                   = 'osm-export-yml/'
 OSM_EXPORT_DATA                     = DATASETS_FOLDER + 'osm-export'
-WINDSPEED_URL                       = 'https://wewantwind.org/static/gis/windspeeds.geojson.zip'
+DTM_GEOTIFF_URL                     = 'https://openwindenergy.s3.us-east-1.amazonaws.com/terrain_lowres_withfeatures.tif'
+WINDSPEED_URL                       = 'https://openwindenergy.s3.us-east-1.amazonaws.com/windspeeds-noabl--uk.geojson.zip'
 WINDSPEED_DATASET                   = 'windspeeds-noabl--uk'
 CUSTOM_CONFIGURATION_PREFIX         = '__'
 CENSUS_2011_ZIP_URL                 = 'https://data.openwind.energy/dataset/6b00ae5f-850c-4c1d-9b65-e2a78715b85e/resource/73141902-5898-4124-90cb-40c6b5ea8059/download/sitepredictor-census-2011.zip'
@@ -2277,6 +2278,21 @@ def generateHistoricalMinorRoads():
 
     LogMessage("Historical minor roads recreation: COMPLETED")
 
+def downloadTerrainGeoTIFF():
+    """
+    Download terrain GeoTIFF used to determine elevation at specific positions
+    """
+
+    global DTM_GEOTIFF_URL
+
+    geotiff_path = basename(DTM_GEOTIFF_URL)
+
+    if not isfile(geotiff_path):
+
+        LogMessage("Downloading Terrain GeoTIFF")
+
+        attemptDownloadUntilSuccess(DTM_GEOTIFF_URL, geotiff_path)
+
 def downloadWindSpeeds():
     """
     Download wind speed data
@@ -3793,6 +3809,9 @@ def createAllTurbinesData():
 
     # Download all necessary OSM data
     osmDownloadData()
+
+    # download terrain GeoTIFF
+    downloadTerrainGeoTIFF()
 
     # Download wind speed data
     downloadWindSpeeds()
