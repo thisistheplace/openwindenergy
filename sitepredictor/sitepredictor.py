@@ -4009,25 +4009,27 @@ def runSitePredictor(batch_grid_spacing):
     # for item in multiprocessing_batch_values:
     #     createSamplingGridData(item)
 
-    LogMessage("************************************************")
-    LogMessage("********** STARTING MULTIPROCESSING ************")
-    LogMessage("************************************************")
-
-    # Run multiprocessing pool
-    with Pool(None) as p:
-        # Populates sampling grid (spaced at RASTER_RESOLUTION metres) with same
-        # features data - where possible - as all turbines, above. 
-        # Year used is (CURRENTYEAR - 1), ie. attempting to predict probability-of-success for now
-        p.map(createSamplingGridData, multiprocessing_batch_values)
-
-    LogMessage("************************************************")
-    LogMessage("*********** ENDING MULTIPROCESSING *************")
-    LogMessage("************************************************")
-
-    LogMessage("Consolidating batch output files...")
-
     output_data = OUTPUT_DATA_SAMPLEGRID
+
     if not isfile(output_data): 
+
+        LogMessage("************************************************")
+        LogMessage("********** STARTING MULTIPROCESSING ************")
+        LogMessage("************************************************")
+
+        # Run multiprocessing pool
+        with Pool(None) as p:
+            # Populates sampling grid (spaced at RASTER_RESOLUTION metres) with same
+            # features data - where possible - as all turbines, above. 
+            # Year used is (CURRENTYEAR - 1), ie. attempting to predict probability-of-success for now
+            p.map(createSamplingGridData, multiprocessing_batch_values)
+
+        LogMessage("************************************************")
+        LogMessage("*********** ENDING MULTIPROCESSING *************")
+        LogMessage("************************************************")
+
+        LogMessage("Consolidating batch output files...")
+
         firstrowwritten = False
 
         for batch_item in multiprocessing_batch_values:
