@@ -16,6 +16,7 @@ while true
             sudo /usr/sbin/apache2ctl restart
             sudo cp /usr/src/openwindenergy/DOMAIN /usr/src/openwindenergy/DOMAINACTIVE
             sudo rm /usr/src/openwindenergy/DOMAIN
+            sudo /usr/bin/systemctl restart tileserver.service
         fi
 
         if [ -f "/usr/src/openwindenergy/RESTARTSERVICES" ]; then
