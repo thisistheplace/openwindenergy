@@ -3239,17 +3239,20 @@ def createDistanceCache(tables):
     all_turbines = postgisGetResults("SELECT ogc_fid FROM %s;", (AsIs(windturbines_all_table), ))
     number_turbines = len(all_turbines)
     scratch_table_1 = '_scratch_table_10'
+    table_index = 0
 
     for table in tables:
+        table_index += 1
         number_cached_records = postgisGetResults("SELECT COUNT(*) FROM %s WHERE table_name = %s", (AsIs(DISTANCE_CACHE_TABLE), table, ))
         number_cached_records = number_cached_records[0][0]
         if number_cached_records != number_turbines:
-            LogMessage("Creating bulk point-to-feature distance cache for table: " + table)
+            LogMessage("Creating bulk point-to-feature distance cache for table: " + table + "(" + str(table_index) + "/" + str(len(tables)) + ")")
             postgisExec("DELETE FROM %s WHERE table_name = %s", (AsIs(DISTANCE_CACHE_TABLE), table, ))
 
             for count in range(len(all_turbines)):
 
-                LogMessage("Getting minimum distance to " + table + " for turbine: " + str(count + 1))
+                if count % 100 == 0:
+                    LogMessage("Getting minimum distance to " + table + " for turbine: " + str(count + 1) + "/" + str(number_turbines))
 
                 turbine_fid = all_turbines[count][0]
 
@@ -3258,10 +3261,11 @@ def createDistanceCache(tables):
                 # Create search bounding box to speed up MIN(ST_Distance)
                 postgisExec("""
                 CREATE TABLE %s AS
-                SELECT dataset.geom FROM %s, 
-                (SELECT ST_Transform(ST_Envelope(ST_Buffer(ST_Transform(geom, 27700), %s)), 4326) geom FROM %s WHERE ogc_fid=%s) boundingbox
+                SELECT dataset.geom FROM %s dataset, 
+                (SELECT ST_Envelope(ST_Buffer(ST_Transform(geom, 27700), %s)) geom FROM %s WHERE ogc_fid=%s) boundingbox
                 WHERE ST_Intersects(dataset.geom, boundingbox.geom);
                 """, (AsIs(scratch_table_1), AsIs(table), AsIs(search_bounding_box_size), AsIs(windturbines_all_table), turbine_fid))
+                postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_1 + "_idx"), AsIs(scratch_table_1), ))
 
                 # Check to see if any features within bounding box 
                 # - if no, use global search
@@ -3277,7 +3281,7 @@ def createDistanceCache(tables):
                 postgisExec("""
                 INSERT INTO %s 
                 SELECT %s AS ogc_fid, %s AS table_name, MIN(ST_Distance(ST_Transform(turbine.geom, 27700), dataset.geom)) AS distance 
-                FROM (SELECT geom FROM %s WHERE ogc_fid=%s) turbine, %s dataset GROUP BY turbine.ogc_fid
+                FROM (SELECT ogc_fid, geom FROM %s WHERE ogc_fid=%s) turbine, %s dataset GROUP BY turbine.ogc_fid
                 """, (AsIs(DISTANCE_CACHE_TABLE), AsIs(turbine_fid), table, AsIs(windturbines_all_table), AsIs(turbine_fid), AsIs(search_table), ))
 
                 postgisExec("""
@@ -3401,13 +3405,17 @@ def runAdditionalDownloads():
 
     global CENSUS_2011_ZIP_URL, ADDITIONAL_DOWNLOADS, DATASETS_FOLDER, LOCALAUTHORITY_CONVERSIONS
     
-    LogMessage("Downloading and extracting 2011 census data...")
 
     census_2011_zip = 'census_2011.zip'
-    attemptDownloadUntilSuccess(CENSUS_2011_ZIP_URL, census_2011_zip)
-    with ZipFile(census_2011_zip, 'r') as zip_ref: zip_ref.extractall(DATASETS_FOLDER)
 
-    LogMessage("2011 census data downloaded and extracted")
+    if not isfile(census_2011_zip):
+
+        LogMessage("Downloading and extracting 2011 census data...")
+
+        attemptDownloadUntilSuccess(CENSUS_2011_ZIP_URL, census_2011_zip)
+        with ZipFile(census_2011_zip, 'r') as zip_ref: zip_ref.extractall(DATASETS_FOLDER)
+
+        LogMessage("2011 census data downloaded and extracted")
 
     possible_extensions_unzipped = ['shp', 'geojson', 'gpkg']
     for additional_download in ADDITIONAL_DOWNLOADS:
