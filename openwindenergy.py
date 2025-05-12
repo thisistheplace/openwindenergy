@@ -1184,7 +1184,7 @@ def deleteDatasetFiles(dataset):
     if CUSTOM_CONFIGURATION is not None: custom_configuration_prefix = CUSTOM_CONFIGURATION_FILE_PREFIX
 
     table = reformatTableName(dataset)
-    turbine_parameters_file_prefix = buildTurbineParametersPrefix().replace('_', '--')
+    turbine_parameters_file_prefix = buildTurbineParametersPrefix().replace('_', '-')
     for possible_extension in possible_extensions:
         dataset_basename = dataset + '.' + possible_extension
         latest_basename = getFinalLayerLatestName(table) + '.' + possible_extension

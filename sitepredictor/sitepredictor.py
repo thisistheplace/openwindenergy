@@ -1166,7 +1166,7 @@ def postgisGetBasicProcessedTables():
 
     custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace(r'_', r'\_')
 
-    table_list = postgisGetResults("""
+    table_list = postgisGetResults(r"""
     SELECT tables.table_name
     FROM information_schema.tables
     WHERE 
@@ -1181,7 +1181,7 @@ def postgisGetBasicProcessedTables():
     table_name NOT LIKE '%%clipping%%' AND 
     table_name NOT LIKE 'osm_boundaries' AND 
     table_name NOT LIKE '\_scratch%%' AND
-    table_name NOT LIKE '""" + custom_configuration_prefix_escape + """%%' AND
+    table_name NOT LIKE '""" + custom_configuration_prefix_escape + r"""%%' AND
     table_name NOT LIKE 'sitepredictor\_\_%%' AND 
     table_name NOT LIKE '%%\_\_27700';
     """, (POSTGRES_DB, ))
@@ -1198,7 +1198,7 @@ def postgisGetBasicUnprocessedTables():
     custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace(r'_', r'\_')
 
     basic_processed = postgisGetBasicProcessedTables()
-    basic_unprocessed = postgisGetResults("""
+    basic_unprocessed = postgisGetResults(r"""
     SELECT tables.table_name
     FROM information_schema.tables
     WHERE 
@@ -1213,7 +1213,7 @@ def postgisGetBasicUnprocessedTables():
     table_name NOT LIKE '%%clipping%%' AND 
     table_name NOT LIKE 'osm_boundaries' AND 
     table_name NOT LIKE '\_scratch%%' AND
-    table_name NOT LIKE '""" + custom_configuration_prefix_escape + """%%' AND
+    table_name NOT LIKE '""" + custom_configuration_prefix_escape + r"""%%' AND
     table_name NOT LIKE 'temp\_%%' AND
     table_name NOT LIKE 'test\_%%' AND
     table_name NOT LIKE 'sitepredictor\_\_%%' AND 
@@ -1239,7 +1239,7 @@ def postgisGetUKBasicUnprocessedTables():
     custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace(r'_', r'\_')
 
     basic_processed = postgisGetBasicProcessedTables()
-    basic_unprocessed = postgisGetResults("""
+    basic_unprocessed = postgisGetResults(r"""
     SELECT tables.table_name
     FROM information_schema.tables
     WHERE 
@@ -1255,7 +1255,7 @@ def postgisGetUKBasicUnprocessedTables():
     table_name NOT LIKE '%%clipping%%' AND 
     table_name NOT LIKE 'osm_boundaries' AND 
     table_name NOT LIKE '\_scratch%%' AND 
-    table_name NOT LIKE '""" + custom_configuration_prefix_escape + """%%' AND
+    table_name NOT LIKE '""" + custom_configuration_prefix_escape + r"""%%' AND
     table_name NOT LIKE 'sitepredictor\_\_%%' AND 
     table_name NOT LIKE '%%\_\_27700';
     """, (POSTGRES_DB, ))
@@ -1277,7 +1277,7 @@ def postgisGetUKBasicProcessedTables():
 
     custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_PREFIX.replace(r'_', r'\_')
 
-    table_list = postgisGetResults("""
+    table_list = postgisGetResults(r"""
     SELECT tables.table_name
     FROM information_schema.tables
     WHERE 
@@ -1287,7 +1287,7 @@ def postgisGetUKBasicProcessedTables():
     table_name NOT IN ('spatial_ref_sys') AND 
     table_name LIKE '%%\_\_uk\_\_pro' AND 
     table_name NOT LIKE '%%\_\_buf\_%%' AND 
-    table_name NOT LIKE '""" + custom_configuration_prefix_escape + """%%' AND
+    table_name NOT LIKE '""" + custom_configuration_prefix_escape + r"""%%' AND
     table_name NOT LIKE 'sitepredictor\_\_%%' AND 
     table_name NOT LIKE '%%\_\_27700';
     """, (POSTGRES_DB, ))
@@ -3225,15 +3225,20 @@ def createDistanceCache(tables):
     Runs efficient PostGIS queries across entire dataset to save time
     """
 
-    global DISTANCE_CACHE_TABLE
+    global DISTANCE_CACHE_TABLE, WINDTURBINES_ALLPROJECTS_DATASET
+
+    search_bounding_box_size = 10000
+
+    windturbines_all_table = reformatTableName(WINDTURBINES_ALLPROJECTS_DATASET)
 
     if not postgisCheckTableExists(DISTANCE_CACHE_TABLE):
         postgisExec("CREATE TABLE %s (ogc_fid INTEGER, table_name VARCHAR(70), distance DOUBLE PRECISION)", (AsIs(DISTANCE_CACHE_TABLE), ))
         postgisExec("CREATE INDEX ON %s (ogc_fid)", (AsIs(DISTANCE_CACHE_TABLE), ))
         postgisExec("CREATE INDEX ON %s (table_name)", (AsIs(DISTANCE_CACHE_TABLE), ))
 
-    number_turbines = postgisGetResults("SELECT COUNT(*) FROM windturbines_all_projects__uk;")
-    number_turbines = number_turbines[0][0]
+    all_turbines = postgisGetResults("SELECT ogc_fid FROM %s;", (AsIs(windturbines_all_table), ))
+    number_turbines = len(all_turbines)
+    scratch_table_1 = '_scratch_table_10'
 
     for table in tables:
         number_cached_records = postgisGetResults("SELECT COUNT(*) FROM %s WHERE table_name = %s", (AsIs(DISTANCE_CACHE_TABLE), table, ))
@@ -3242,26 +3247,51 @@ def createDistanceCache(tables):
             LogMessage("Creating bulk point-to-feature distance cache for table: " + table)
             postgisExec("DELETE FROM %s WHERE table_name = %s", (AsIs(DISTANCE_CACHE_TABLE), table, ))
 
-            LogMessage("Caching for points where distance >= 0")
+            for count in range(len(all_turbines)):
 
-            postgisExec("""
-            INSERT INTO %s 
-            SELECT turbine.ogc_fid, %s AS table_name, MIN(ST_Distance(ST_Transform(turbine.geom, 27700), dataset.geom)) AS distance 
-            FROM windturbines_all_projects__uk turbine, %s dataset GROUP BY turbine.ogc_fid
-            """, (AsIs(DISTANCE_CACHE_TABLE), table, AsIs(table), ))
+                LogMessage("Getting minimum distance to " + table + " for turbine: " + str(count + 1))
 
-            LogMessage("Caching for points where inside feature - distance < 0")
+                turbine_fid = all_turbines[count][0]
 
-            postgisExec("""
-            UPDATE %s cache SET distance = 
-            (
-                SELECT -MIN(ST_Distance(ST_Transform(turbine.geom, 27700), ST_ExteriorRing(dataset.geom))) FROM 
-                windturbines_all_projects__uk turbine, %s dataset
-                WHERE turbine.ogc_fid = cache.ogc_fid AND ST_Contains(dataset.geom, ST_Transform(turbine.geom, 27700))
-            )
-            WHERE 
-            cache.distance = 0 AND cache.table_name = %s;
-            """, (AsIs(DISTANCE_CACHE_TABLE), AsIs(table), table, ))
+                if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+
+                # Create search bounding box to speed up MIN(ST_Distance)
+                postgisExec("""
+                CREATE TABLE %s AS
+                SELECT dataset.geom FROM %s, 
+                (SELECT ST_Transform(ST_Envelope(ST_Buffer(ST_Transform(geom, 27700), %s)), 4326) geom FROM %s WHERE ogc_fid=%s) boundingbox
+                WHERE ST_Intersects(dataset.geom, boundingbox.geom);
+                """, (AsIs(scratch_table_1), AsIs(table), AsIs(search_bounding_box_size), AsIs(windturbines_all_table), turbine_fid))
+
+                # Check to see if any features within bounding box 
+                # - if no, use global search
+                # - if yes, use to select nearest feature
+
+                num_features = postgisGetResults("SELECT COUNT(*) FROM %s;", (AsIs(scratch_table_1), ))
+                num_features = num_features[0][0]
+                if num_features == 0: search_table = table
+                else: search_table = scratch_table_1
+
+                if num_features == 0: LogMessage("No features found within bounding box of turbine " + str(turbine_fid) + " for " + table)
+
+                postgisExec("""
+                INSERT INTO %s 
+                SELECT %s AS ogc_fid, %s AS table_name, MIN(ST_Distance(ST_Transform(turbine.geom, 27700), dataset.geom)) AS distance 
+                FROM (SELECT geom FROM %s WHERE ogc_fid=%s) turbine, %s dataset GROUP BY turbine.ogc_fid
+                """, (AsIs(DISTANCE_CACHE_TABLE), AsIs(turbine_fid), table, AsIs(windturbines_all_table), AsIs(turbine_fid), AsIs(search_table), ))
+
+                postgisExec("""
+                UPDATE %s cache SET distance = 
+                (
+                    SELECT -MIN(ST_Distance(ST_Transform(turbine.geom, 27700), ST_ExteriorRing(dataset.geom))) FROM 
+                    windturbines_all_projects__uk turbine, %s dataset
+                    WHERE turbine.ogc_fid = cache.ogc_fid AND ST_Contains(dataset.geom, ST_Transform(turbine.geom, 27700))
+                )
+                WHERE 
+                cache.distance = 0 AND cache.table_name = %s AND cache.ogc_fid = %s;
+                """, (AsIs(DISTANCE_CACHE_TABLE), AsIs(search_table), table, AsIs(turbine_fid), ))
+
+                if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
 
 def createBatchGrid(batch_grid_spacing):
     """
