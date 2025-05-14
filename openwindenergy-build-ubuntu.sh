@@ -233,6 +233,7 @@ sudo NEEDRESTART_MODE=a apt install libcurl4-openssl-dev libpixman-1-dev libpixm
 sudo NEEDRESTART_MODE=a apt install libc++-dev libc++abi-dev libpng-dev -y | tee -a /usr/src/openwindenergy/log.txt
 sudo NEEDRESTART_MODE=a apt install libgl1-mesa-dev libgl1-mesa-dri libjpeg-dev -y | tee -a /usr/src/openwindenergy/log.txt
 sudo NEEDRESTART_MODE=a apt install qgis qgis-plugin-grass -y | tee -a /usr/src/openwindenergy/log.txt
+sudo NEEDRESTART_MODE=a apt install default-jdk -y | tee -a /usr/src/openwindenergy/log.txt
 
 sudo apt update -y | tee -a /usr/src/openwindenergy/log.txt
 
@@ -336,6 +337,10 @@ echo '********* STAGE 10: Finished installing tippecanoe **********' >> /usr/src
 echo '' >> /usr/src/openwindenergy/log.txt
 echo '********* STAGE 11: Installing PostGIS **********' >> /usr/src/openwindenergy/log.txt
 
+sudo apt update -y | tee -a /usr/src/openwindenergy/log.txt
+sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+sudo apt update -y | tee -a /usr/src/openwindenergy/log.txt
 sudo NEEDRESTART_MODE=a apt install postgresql-postgis -y | tee -a /usr/src/openwindenergy/log.txt
 
 echo '********* STAGE 11: Finished installing PostGIS  **********' >> /usr/src/openwindenergy/log.txt
@@ -353,6 +358,7 @@ sudo service postgresql restart | tee -a /usr/src/openwindenergy/log.txt
 sudo -u postgres psql -c "CREATE ROLE openwind WITH LOGIN PASSWORD 'password';" | tee -a /usr/src/openwindenergy/log.txt
 sudo -u postgres createdb -O openwind openwind | tee -a /usr/src/openwindenergy/log.txt
 sudo -u postgres psql -d openwind -c 'CREATE EXTENSION postgis;' | tee -a /usr/src/openwindenergy/log.txt
+sudo -u postgres psql -d openwind -c 'CREATE EXTENSION postgis_raster;' | tee -a /usr/src/openwindenergy/log.txt
 sudo -u postgres psql -d openwind -c 'GRANT ALL PRIVILEGES ON DATABASE openwind TO openwind;' | tee -a /usr/src/openwindenergy/log.txt
 
 echo "[Unit]

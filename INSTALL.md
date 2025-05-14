@@ -323,10 +323,10 @@ If you are still experiencing memory issues building OpenWind Energy on Docker, 
 
 ## 3a. Mac - Local (non-Docker) install
 
-Install `PostGIS`, `Python3.9`, `GDAL`, `tippecanoe`, `QGIS`, general software and libraries required to compile `tilemaker`:
+Install `PostGIS`, `Python3.9`, `GDAL`, `tippecanoe`, `QGIS`, `OpenJDK` and general software and libraries required to compile `tilemaker`:
 
 ```
-brew install postgis python@3.9 gdal tippecanoe cmake make geos rapidjson gqis git \
+brew install postgis python@3.9 gdal tippecanoe cmake make geos rapidjson gqis java git \
 libpq libtiff libspatialite lua shapelib sqlite curl proj node npm virtualenv
 ```
 Install `tilemaker` with:
@@ -350,7 +350,7 @@ tilemaker --help
 
 ## 3b. Ubuntu - Local (non-Docker) install
 
-Install `Python3.9`, `GDAL`, `QGIS`, general software and libraries required to compile `tilemaker` and `tippecanoe`:
+Install `Python3.9`, `GDAL`, `QGIS`, `OpenJDK` and general software and libraries required to compile `tilemaker` and `tippecanoe`:
 
 ```
 sudo add-apt-repository ppa:deadsnakes/ppa
@@ -360,7 +360,7 @@ sudo apt install  gnupg software-properties-common cmake make g++ dpkg ca-certif
                   liblua5.4-dev rapidjson-dev libshp-dev libgdal-dev shapelib \
                   spatialite-bin sqlite3 lua5.4 gdal-bin virtualenv \
                   zip unzip curl nano wget pip git nodejs npm proj-bin \
-                  qgis qgis-plugin-grass \
+                  qgis qgis-plugin-grass default-jdk \
                   python3.9 python3.9-dev python3.9-venv python3-gdal -y
 ```
 
@@ -565,6 +565,7 @@ sudo service postgresql restart
 sudo -u postgres createuser -P openwind
 sudo -u postgres createdb -O openwind openwind
 sudo -u postgres psql -d openwind -c 'CREATE EXTENSION postgis;'
+sudo -u postgres psql -d openwind -c 'CREATE EXTENSION postgis_raster;'
 sudo -u postgres psql -d openwind -c 'GRANT ALL PRIVILEGES ON DATABASE openwind TO openwind;'
 ```
 

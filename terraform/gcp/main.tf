@@ -13,6 +13,10 @@ provider "google" {
   zone    = "us-east1-c"
 }
 
+resource "google_compute_address" "openwindenergy_static_ip" {
+  name = "ipv4-address"
+}
+
 resource "google_compute_network" "openwindenergy_network" {
   name = "openwindenergy-network"
 }
@@ -43,6 +47,7 @@ EOF
   network_interface {
     network = google_compute_network.openwindenergy_network.name
     access_config {
+      nat_ip = google_compute_address.openwindenergy_static_ip.address
     }
   }
 }
@@ -73,3 +78,4 @@ resource "google_compute_firewall" "allow_http_https" {
   target_tags = ["http-server", "https-server"]
   description = "Allow HTTP and HTTPS traffic"
 }
+

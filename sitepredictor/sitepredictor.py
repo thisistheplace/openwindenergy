@@ -47,7 +47,7 @@ import shutil
 import yaml
 import sqlite3
 import psycopg2
-import psycopg2.extras 
+import psycopg2.extras
 import time
 import pprint as pp
 import rasterio
@@ -56,7 +56,7 @@ import pandas as pd
 import numpy as np
 import geopandas as gpd
 import multiprocessing
-from multiprocessing import Pool
+from multiprocessing import Pool, Value
 from rasterio.transform import from_origin
 from datetime import datetime
 from pathlib import Path
@@ -72,7 +72,7 @@ from h2o.model.regression import h2o_mean_squared_error
 
 pd.options.plotting.backend = "plotly"
 
-gdal.DontUseExceptions() 
+gdal.DontUseExceptions()
 
 if not isfile('../.env-sitepredictor'): shutil.copy('../.env', '../.env-sitepredictor')
 
@@ -82,6 +82,7 @@ load_dotenv('../.env-sitepredictor')
 WORKING_FOLDER                      = str(Path(__file__).absolute().parent) + '/'
 DATASETS_FOLDER                     = WORKING_FOLDER + 'datasets/'
 OUTPUT_FOLDER                       = WORKING_FOLDER + 'output/'
+CLIPPING_FOLDER                     = WORKING_FOLDER + 'clipping/'
 OSM_MAIN_DOWNLOAD                   = 'https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf'
 OSM_CONFIG_FOLDER                   = 'osm-export-yml/'
 OSM_EXPORT_DATA                     = DATASETS_FOLDER + 'osm-export'
@@ -119,17 +120,17 @@ TRANSFORMER_SOURCE_4326             = None
 TRANSFORMER_DEST_27700              = None
 TRANSFORMER_TO_27700                = None
 RASTER_RESOLUTION                   = 1000 # Number of metres per raster grid square
-# # RASTER_RESOLUTION                   = 250 # Number of metres per raster grid square
-# RASTER_RESOLUTION                   = 20 # Number of metres per raster grid square
-RASTER_XMIN                         = 0 
+RASTER_XMIN                         = 0
 RASTER_YMIN                         = 7250
-RASTER_XMAX                         = 664000 
+RASTER_XMAX                         = 664000
 RASTER_YMAX                         = 1296000
-SAMPLING_GRID                       = "sitepredictor__sampling_" + str(RASTER_RESOLUTION) + "_m__uk"
-BATCH_SAMPLING_GRID                 = "sitepredictor__batchsampling_" + str(RASTER_RESOLUTION) + "_m"
+# DEFAULT_BATCH_GRID_SPACING          = 50000
+DEFAULT_BATCH_GRID_SPACING          = 400000
+SAMPLING_GRID                       = "sitepredictor__sampling"
+BATCH_SAMPLING_GRID                 = "sitepredictor__batch_points"
 TEST_SAMPLING_GRID_SIZE             = 16000
 QUIET_MODE                          = True
-RASTER_OUTPUT_FOLDER                = "/Volumes/A002/Distance_Rasters/rasters_new/"
+RASTER_OUTPUT_FOLDER                = WORKING_FOLDER + "rasters/"
 GEOCODE_POSITION_LOOKUP             = {}
 COUNCIL_POSITION_LOOKUP             = {}
 CENSUS_CACHE                        = {}
@@ -150,7 +151,7 @@ ALLTURBINES_DF                      = None
 CKAN_USER_AGENT                     = 'ckanapi/1.0 (+https://openwind.energy)'
 LOG_SINGLE_PASS                     = WORKING_FOLDER + '../log.txt'
 
-# We try and include as many columns as possible to ML 
+# We try and include as many columns as possible to ML
 # but there are some columns that are clearly irrelevant to prediction
 
 ML_IGNORE_COLUMNS                   = [
@@ -206,7 +207,7 @@ CSV_CONVERSIONS = {
     "Tenure: Private rented; measures: Value": "tenure_rented_private",
     "Tenure: Private rented: Private landlord or letting agency; measures: Value": "tenure_rented_private_landlord_agency",
     "Tenure: Private rented: Other; measures: Value": "tenure_rented_private_other",
-    "Tenure: Living rent free; measures: Value": "tenure_living_rent_free",    
+    "Tenure: Living rent free; measures: Value": "tenure_living_rent_free",
     "; measures: Value": "",
 }
 
@@ -350,53 +351,87 @@ TABLES_TO_EXCLUDE                   =   [ \
                                         ]
 
 # ***********************************************************
-# Parameters that specify how close footpath/service-road 
-# needs to be to turbines to count as 'turbine-caused' 
+# Parameters that specify how close footpath/service-road
+# needs to be to turbines to count as 'turbine-caused'
 # footpath/service-road.
 # All parameters are in metres
 # ***********************************************************
 
-# Maximum distance between start/end of footpath/service-road 
+# Maximum distance between start/end of footpath/service-road
 # and turbine to count as turbine-created footpath/service-road
-# ie. if a footpath or service road starts or eventually 
-# leads to a turbine within 100 metres, then => turbine-created 
-# footpath/service-road. In contrat to MAXIMUM_DISTANCE_LINE, 
+# ie. if a footpath or service road starts or eventually
+# leads to a turbine within 100 metres, then => turbine-created
+# footpath/service-road. In contrat to MAXIMUM_DISTANCE_LINE,
 # below, this is unlikely to distort ML results in trivial way
 
 MAXIMUM_DISTANCE_ENDPOINT           = 100
 
-# Maxiumum distance between point along line and turbine to 
+# Maxiumum distance between point along line and turbine to
 # count as turbine-created footpath/service-road
-# ie. if footpath comes within 50 metres of turbine along 
+# ie. if footpath comes within 50 metres of turbine along
 # its stretch, then => turbine-created footpath/service-road
 # NOTE: 50 metres is typical turbine micrositing distance
 # ******************* WARNING ***************************
-# This will mean there is likely to be minimum 50 metre 
-# buffer around footpaths and service roads in final ML 
+# This will mean there is likely to be minimum 50 metre
+# buffer around footpaths and service roads in final ML
 # as we're eliminating any footpaths/service-roads < 50m
-# However, this is better than distorting results with 
+# However, this is better than distorting results with
 # footpaths and service roads that weren't there before
-# construction - which will result in 'being close to 
-# footpaths/service-roads' significantly increasing 
-# P(SUCCESS) - because almost all successful projects 
+# construction - which will result in 'being close to
+# footpaths/service-roads' significantly increasing
+# P(SUCCESS) - because almost all successful projects
 # have access footpaths/service-roads.
 # *******************************************************
 
 MAXIMUM_DISTANCE_LINE               = 50
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(processName)s - [%(levelname)-2s] %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_SINGLE_PASS),
-        logging.FileHandler("{0}/{1}.log".format(WORKING_FOLDER, datetime.today().strftime('%Y-%m-%d'))),
-        logging.StreamHandler()
-    ]
-)
-
 # ***********************************************************
 # ***************** General helper functions ****************
 # ***********************************************************
+
+def initLogging():
+    """
+    Initialises logging
+    """
+
+    class PaddedProcessFormatter(logging.Formatter):
+        def format(self, record):
+            # Pad process ID to 4 digits with leading zeros
+            record.process_padded = f"PID:{record.process:08d}"
+            return super().format(record)
+
+    log_format = '%(asctime)s,%(msecs)03d [%(process_padded)s] [%(levelname)-2s] %(message)s'
+    formatter = PaddedProcessFormatter(log_format, "%Y-%m-%d %H:%M:%S")
+    handler_1 = logging.StreamHandler()
+    handler_2 = logging.FileHandler(LOG_SINGLE_PASS)
+    handler_3 = logging.FileHandler("{0}/{1}.log".format(WORKING_FOLDER, datetime.today().strftime('%Y-%m-%d')))
+
+    handler_1.setFormatter(formatter)
+    handler_2.setFormatter(formatter)
+    handler_3.setFormatter(formatter)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(process_padded)s] [%(levelname)-2s] %(message)s',
+        handlers=[handler_1, handler_2, handler_3]
+    )
+
+def init_globals(counter):
+    """
+    Used as counter across multiprocessing threads
+    """
+
+    global cnt
+    cnt = counter
+
+def init_counter_total_globals(counter, totalnum):
+    """
+    Used as counter across multiprocessing threads
+    """
+
+    global cnt, total
+    cnt = counter
+    total = totalnum
 
 def getJSON(json_path):
     """
@@ -437,13 +472,12 @@ def getFilesInFolder(folderpath):
     if files is not None: files.sort()
     return files
 
-def LogMessage(logtext):
+def LogMissingData(logtext):
     """
-    Logs message to console with timestamp
+    Logs missing data message - easy to switch on and off here
     """
 
-    logger = multiprocessing.get_logger()
-    logging.info(logtext)
+    # LogMessage(logstage)
 
 def LogStage(logstage):
     """
@@ -451,6 +485,14 @@ def LogStage(logstage):
     """
 
     # LogMessage(logstage)
+
+def LogMessage(logtext):
+    """
+    Logs message to console with timestamp
+    """
+
+    logger = multiprocessing.get_logger()
+    logging.info(logtext)
 
 def LogError(logtext):
     """
@@ -526,9 +568,9 @@ def runSubprocess(subprocess_array):
 
     global QUIET_MODE
 
-    if QUIET_MODE: 
-        if subprocess_array[0] in ['gdal_proximity.py']: subprocess_array.append('-q')
-        if subprocess_array[0] in ['gdal_create', 'gdal_rasterize', 'gdalwarp', 'gdal_calc']: subprocess_array.append('--quiet')
+    if QUIET_MODE:
+        if subprocess_array[0] in ['gdal_proximity.py', 'gdalwarp', 'gdal_rasterize']: subprocess_array.append('-q')
+        if subprocess_array[0] in ['gdal_create', 'gdal_calc.py']: subprocess_array.append('--quiet')
 
     output = subprocess.run(subprocess_array)
 
@@ -591,7 +633,7 @@ def getElevation(position):
     target_srs.ImportFromWkt(raster_proj)
     ct = osr.CoordinateTransformation(source_srs, target_srs)
     mapx, mapy, *_ = ct.TransformPoint(position['lng'], position['lat'])
-    gt_inv = gdal.InvGeoTransform(gt) 
+    gt_inv = gdal.InvGeoTransform(gt)
     px, py = gdal.ApplyGeoTransform(gt_inv, mapx, mapy)
     py = int(py)
     px = int(px)
@@ -659,7 +701,7 @@ def polygonizeraster(uniqueid, raster_file):
     source_srs.ImportFromWkt(raster_proj)
     src_ds = gdal.Open(memory_transformed_raster)
     srs = osr.SpatialReference()
-    srs.ImportFromWkt(src_ds.GetProjection())    
+    srs.ImportFromWkt(src_ds.GetProjection())
     srcband = src_ds.GetRasterBand(1)
 
     dst_ds = driver.CreateDataSource(memory_geojson)
@@ -674,34 +716,12 @@ def polygonizeraster(uniqueid, raster_file):
 
     return geojson_content
 
-def createBlankRaster(raster, output):
-    """
-    Creates blank raster
-    """
-
-    global RASTER_RESOLUTION, RASTER_XMIN, RASTER_YMIN, RASTER_XMAX, RASTER_YMAX
-
-    if isfile(output): os.remove(output)
-
-    LogMessage("Creating blank raster for: " + raster)
-
-    runSubprocess([ "gdal_create", \
-                    "-burn", "0", \
-                    "-outsize", str(int((RASTER_XMAX - RASTER_XMIN) / RASTER_RESOLUTION)), str(int((RASTER_YMAX - RASTER_YMIN) / RASTER_RESOLUTION)), \
-                    "-a_ullr", str(RASTER_XMIN), str(RASTER_YMIN), str(RASTER_XMAX), str(RASTER_YMAX), \
-                    "-a_nodata", "-9999", \
-                    "-ot", "Float64", \
-                    "-of", "GTiff", \
-                    "-a_srs", "EPSG:27700", \
-                    output])
-
-
-def createFeaturesRaster(table, output):
+def createFeaturesRaster(raster_resolution, table, output):
     """
     Creates basic raster of features
     """
 
-    global RASTER_RESOLUTION, RASTER_XMIN, RASTER_YMIN, RASTER_XMAX, RASTER_YMAX
+    global RASTER_XMIN, RASTER_YMIN, RASTER_XMAX, RASTER_YMAX
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
 
     LogMessage("Creating features raster from: " + table)
@@ -715,36 +735,13 @@ def createFeaturesRaster(table, output):
 
     runSubprocess([ "gdal_rasterize", \
                     "-burn", "1", \
-                    "-tr", str(RASTER_RESOLUTION), str(RASTER_RESOLUTION), \
+                    "-tr", str(raster_resolution), str(raster_resolution), \
                     "-te", str(RASTER_XMIN), str(RASTER_YMIN), str(RASTER_XMAX), str(RASTER_YMAX), \
                     "-a_nodata", "-9999", \
                     "-ot", "Float64", \
                     "-of", "GTiff", \
                     'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
                     "-sql", sql, \
-                    output])
-
-def createFeaturesRasterWithValue(table, output, value_column):
-    """
-    Creates basic raster of features
-    """
-
-    global RASTER_RESOLUTION, RASTER_XMIN, RASTER_YMIN, RASTER_XMAX, RASTER_YMAX
-    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
-
-    LogMessage("Creating features raster from: " + table)
-
-    if isfile(output): os.remove(output)
-
-    runSubprocess([ "gdal_rasterize", \
-                    "-a", value_column, \
-                    "-tr", str(RASTER_RESOLUTION), str(RASTER_RESOLUTION), \
-                    "-te", str(RASTER_XMIN), str(RASTER_YMIN), str(RASTER_XMAX), str(RASTER_YMAX), \
-                    "-a_nodata", "-9999", \
-                    "-ot", "Float64", \
-                    "-of", "GTiff", \
-                    'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
-                    "-sql", "SELECT " + value_column + ", ST_Transform(geom, 27700) FROM " + table, \
                     output])
 
 def cropRaster(input, output):
@@ -760,30 +757,32 @@ def cropRaster(input, output):
 
     runSubprocess([ "gdalwarp", \
                     "-of", "GTiff", \
-                    "-cutline", "-dstnodata", "-9999", CLIPPING_PATH, \
+                    "-cutline", CLIPPING_PATH, \
+                    "-dstnodata", "-9999", \
                     "-crop_to_cutline", input, \
                     output ])
 
-def getDistanceRasterPath(table):
+def getDistanceRasterPath(raster_resolution, table):
     """
     Gets path of distance raster from table
     """
 
-    global RASTER_RESOLUTION, RASTER_OUTPUT_FOLDER
+    global RASTER_OUTPUT_FOLDER
 
     table = table.replace('__27700', '__27700')
 
-    return RASTER_OUTPUT_FOLDER + 'distance__' + str(RASTER_RESOLUTION) + '_m_resolution__' + table + '.tif'
+    return RASTER_OUTPUT_FOLDER + 'distance__' + str(raster_resolution) + '_m_resolution__' + table + '.tif'
 
 
-def createDistanceRaster(input, output, batch_index, batch_grid_spacing):
+def createDistanceRaster(raster_resolution, input, output, batch_index, batch_grid_spacing):
     """
     Creates distance raster from feature raster
     """
 
-    global RASTER_RESOLUTION
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
     global CLIPPING_PATH, RASTER_OUTPUT_FOLDER
+
+    makeFolder(RASTER_OUTPUT_FOLDER)
 
     if not isfile(output):
 
@@ -791,7 +790,7 @@ def createDistanceRaster(input, output, batch_index, batch_grid_spacing):
 
         LogMessage("Creating inversion of original feature: " + basename(inverted_file))
 
-        runSubprocess([ "gdal_calc", \
+        runSubprocess([ "gdal_calc.py", \
                         "-A", input, \
                         "--outfile=" + inverted_file, \
                         '--calc="(1*(A==-9999))+(-9999*(A==1))"', \
@@ -824,7 +823,7 @@ def createDistanceRaster(input, output, batch_index, batch_grid_spacing):
 
         LogMessage("Creating composite distance raster from: " + basename(original_distance_file) + ' + ' + basename(inverted_distance_file))
 
-        runSubprocess([ "gdal_calc", \
+        runSubprocess([ "gdal_calc.py", \
                         "-A", original_distance_file, \
                         "-B", inverted_distance_file, \
                         "--outfile=" + output, \
@@ -834,10 +833,10 @@ def createDistanceRaster(input, output, batch_index, batch_grid_spacing):
         if isfile(original_distance_file): os.remove(original_distance_file)
         if isfile(inverted_distance_file): os.remove(inverted_distance_file)
 
-    # If processing batches, clip core distance raster to batch cell and save as batch-specific raster 
+    # If processing batches, clip core distance raster to batch cell and save as batch-specific raster
     if batch_index is not None:
 
-        batch_output = buildBatchRasterFilename(output, batch_index, batch_grid_spacing)
+        batch_output = buildBatchRasterFilename(raster_resolution, output, batch_index, batch_grid_spacing)
         batch_clipping = buildBatchRasterClippingFilename(batch_index, batch_grid_spacing)
 
         if not isfile(batch_clipping):
@@ -851,15 +850,16 @@ def createDistanceRaster(input, output, batch_index, batch_grid_spacing):
                             'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
                             "-dialect", "sqlite", \
                             "-sql", \
-                            "SELECT ST_Buffer(geom, " + str(RASTER_RESOLUTION) + ") geometry FROM " + batch_cell_table, \
+                            "SELECT ST_Buffer(geom, " + str(raster_resolution) + ") geometry FROM " + batch_cell_table, \
                             "-nln", "batch_clipping",
                             "--config", "OGR_PG_ENABLE_METADATA", "NO" ])
 
-        LogMessage("Clipping raster to clipping path: " + output)
+        LogMessage("Batch clipping: " + basename(output))
 
         runSubprocess([ "gdalwarp", \
                         "-of", "GTiff", \
-                        "-cutline", "-dstnodata", "-9999", batch_clipping, \
+                        "-cutline", batch_clipping, \
+                        "-dstnodata", "-9999", \
                         "-crop_to_cutline", output, \
                         batch_output ])
 
@@ -872,51 +872,60 @@ def createCappedDistanceRaster(input, output, capvalue):
 
     if isfile(output): os.remove(output)
 
-    runSubprocess([ "gdal_calc", \
+    runSubprocess([ "gdal_calc.py", \
                     "-A", input, \
                     "--outfile=" + output, \
                     '--calc="(A*(A<=' + str(capvalue) + '))+(' + str(capvalue) + '*(A>' + str(capvalue) + '))"' ])
 
-def createRasterFromGeoJSON(geojson_path, raster_path):
+def createRasterFromGeoJSON(raster_resolution, geojson_path, raster_path):
     """
     Creates raster from GeoJSON
     """
 
-    global RASTER_RESOLUTION, OUTPUT_ML_CSV
+    global OUTPUT_ML_CSV
 
-    gridsquare_offset_negative = int(RASTER_RESOLUTION / 2)
+    gridsquare_offset_negative = int(raster_resolution / 2)
+    output_ml = buildOutputPath(OUTPUT_ML_CSV, raster_resolution)
 
     raster_data = getJSON(geojson_path)
 
-    with open(OUTPUT_ML_CSV, 'w', newline='') as csvfile:
+    LogMessage("Converting GeoJSON file with 'prediction' property for all points into raster...")
+
+    LogMessage("Converting GeoJSON into CSV")
+
+    with open(output_ml, 'w', newline='') as csvfile:
         fieldnames = ['easting', 'northing', 'probability']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-    with open(OUTPUT_ML_CSV, 'a', newline='') as csvfile:
+    with open(output_ml, 'a', newline='') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         for raster_item in raster_data['features']:
             coordinates = raster_item['geometry']['coordinates']
             easting, northing = lnglat_to_bngrs(coordinates[0], coordinates[1])
             writer.writerow({'easting': int(easting), 'northing': int(northing), 'probability': raster_item['properties']['prediction']})
 
-    df = pd.read_csv(OUTPUT_ML_CSV)
+    LogMessage("Finished converting GeoJSON into CSV")
+
+    LogMessage("Generating GeoTIFF raster")
+
+    df = pd.read_csv(output_ml)
 
     nodata_val = -9999
     x_min = df['easting'].min()
     x_max = df['easting'].max()
     y_min = df['northing'].min()
     y_max = df['northing'].max()
-    width = int(np.ceil((x_max - x_min) / RASTER_RESOLUTION))
-    height = int(np.ceil((y_max - y_min) / RASTER_RESOLUTION)) + 1
+    width = int(np.ceil((x_max - x_min) / raster_resolution)) + 1
+    height = int(np.ceil((y_max - y_min) / raster_resolution)) + 1
     raster = np.full((height, width), nodata_val, dtype=np.float32)
 
     for _, row in df.iterrows():
-        col = int((row["easting"] - x_min) / RASTER_RESOLUTION)
-        row_idx = int((y_max - row["northing"]) / RASTER_RESOLUTION)
+        col = int((row["easting"] - x_min) / raster_resolution)
+        row_idx = int((y_max - row["northing"]) / raster_resolution)
         raster[row_idx, col] = row["probability"]
 
-    transform = from_origin(x_min - gridsquare_offset_negative, y_max + gridsquare_offset_negative, RASTER_RESOLUTION, RASTER_RESOLUTION)
+    transform = from_origin(x_min - gridsquare_offset_negative, y_max + gridsquare_offset_negative, raster_resolution, raster_resolution)
 
     temp_raster_path = 'temp.tif'
     if isfile(temp_raster_path): os.remove(temp_raster_path)
@@ -937,6 +946,8 @@ def createRasterFromGeoJSON(geojson_path, raster_path):
 
     # cropRaster(temp_raster_path, raster_path)
     if isfile(temp_raster_path): os.remove(temp_raster_path)
+
+    LogMessage("Finished generating GeoTIFF raster")
 
 def ingrs_to_lnglat(easting, northing):
     """
@@ -1075,7 +1086,7 @@ def postgisImportDatasetGIS(dataset_path, dataset_table, orig_srs='EPSG:4326'):
                             "-s_srs", orig_srs, \
                             "-t_srs", 'EPSG:4326']
 
-    if dataset_table in ['sitepredictor__infuse_lsoa__uk', 'sitepredictor__infuse_oa__uk']: 
+    if dataset_table in ['sitepredictor__infuse_lsoa__uk', 'sitepredictor__infuse_oa__uk']:
         ogr2ogr_array.append("-nlt")
         ogr2ogr_array.append("MULTIPOLYGON")
 
@@ -1101,8 +1112,8 @@ def postgisExportExplodedDataset(dataset, filepath, geometrytype):
                     "-nln", dataset, \
                     "-dialect", "sqlite", \
                     "-explodecollections", \
-                    "-sql", "SELECT fid, geom FROM '" + table + "' WHERE ST_GeometryType(geom)='" + geometrytype + "'"]) 
-    
+                    "-sql", "SELECT fid, geom FROM '" + table + "' WHERE ST_GeometryType(geom)='" + geometrytype + "'"])
+
 def postgisGetResults(sql_text, sql_parameters=None):
     """
     Runs database query and returns results
@@ -1229,7 +1240,7 @@ def postgisGetBasicUnprocessedTables():
 def postgisGetUKBasicUnprocessedTables():
     """
     Gets list of all UK 'basic' dataset tables where no '__pro' version exists
-    This typically occurs with 'Other technical constraints' layers that always 
+    This typically occurs with 'Other technical constraints' layers that always
     require buffering and where this buffering is applied before '__pro' version
     is generated
     """
@@ -1332,7 +1343,7 @@ def postgisProcessTable(source_table, processed_table):
 
     postgisExec("CREATE TABLE %s AS SELECT ST_MakeValid(dumped.geom) geom FROM (SELECT (ST_Dump(geom)).geom geom FROM %s) dumped;", \
                 (AsIs(scratch_table_1), AsIs(source_table), ))
-    
+
     postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_1 + "_idx"), AsIs(scratch_table_1), ))
 
     LogMessage(" --> Step 2: Clipping partially overlapping geometries")
@@ -1365,7 +1376,7 @@ def postgisProcessTable(source_table, processed_table):
     if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
 
     LogMessage(" --> COMPLETED: Processed table: " + processed_table)
-    
+
 def postgisAmalgamateAndDissolve(target_table, child_tables):
     """
     Amalgamates and dissolves all child tables into target table
@@ -1374,9 +1385,9 @@ def postgisAmalgamateAndDissolve(target_table, child_tables):
     scratch_table_1 = '_scratch_table_10'
     scratch_table_2 = '_scratch_table_11'
 
-    # We run process on all children - even if only one child - as process runs 
+    # We run process on all children - even if only one child - as process runs
     # ST_Union (dissolve) on datasets for first time to eliminate overlapping polygons
-     
+
     children_sql = " UNION ".join(['SELECT geom FROM ' + table_name for table_name in child_tables])
 
     if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
@@ -1470,7 +1481,7 @@ def createTransformedTable(dataset_table):
     """
 
     dataset_table_transformed = dataset_table + '__27700'
-    if not postgisCheckTableExists(dataset_table_transformed):         
+    if not postgisCheckTableExists(dataset_table_transformed):
 
         LogMessage("Recreating EPSG:27700 projected version of: " + dataset_table)
 
@@ -1578,6 +1589,19 @@ def removeNonHistoricalTables(table_list):
 
     return final_tables
 
+def buildOutputPath(basepath, raster_resolution):
+    """
+    Builds output path adding raster_resolution
+    """
+
+    outputpath_dir = os.path.dirname(basepath)
+    outputpath_basename = basename(basepath)
+    outputpath_basename_elements = outputpath_basename.split('.')
+
+    output_path = join(outputpath_dir, outputpath_basename_elements[0] + '--' + str(raster_resolution) + "-m." + outputpath_basename_elements[1])
+
+    return output_path
+
 def buildProcessedTableName(layername):
     """
     Builds processed table name
@@ -1642,16 +1666,16 @@ def buildBatchGridTableName(batch_grid_spacing):
     Builds batch grid table name
     """
 
-    return "sitepredictor__batch_grid__spacing_" + str(batch_grid_spacing) + "_m__uk"
+    return "sitepredictor__batch_grid__spc_" + str(batch_grid_spacing) + "_m__uk"
 
 def buildBatchCellTableName(batch_index, batch_grid_spacing):
     """
     Builds batch cell table name
     """
 
-    return "sitepredictor__batch_grid__batch_" + str(batch_index) + "_spacing_" + str(batch_grid_spacing) + "_m__uk"
+    return "sitepredictor__batch_grid__idx_" + str(batch_index) + "_spc_" + str(batch_grid_spacing) + "_m__uk"
 
-def buildBatchRasterFilename(output, batch_index, batch_grid_spacing):
+def buildBatchRasterFilename(raster_resolution, output, batch_index, batch_grid_spacing):
     """
     Builds batch raster filename
     """
@@ -1663,11 +1687,13 @@ def buildBatchRasterClippingFilename(batch_index, batch_grid_spacing):
     Builds batch raster filename
     """
 
-    if not isdir('clipping'): makeFolder('clipping')
+    global CLIPPING_FOLDER
 
-    return 'clipping/clipping_batch_' + str(batch_index) + '_' + str(batch_grid_spacing) + 'm.geojson'
+    if not isdir('clipping'): makeFolder(CLIPPING_FOLDER)
 
-    
+    return CLIPPING_FOLDER + 'clipping_batch_' + str(batch_index) + '_' + str(batch_grid_spacing) + 'm.geojson'
+
+
 # ***********************************************************
 # *************** Machine learning functions ****************
 # ***********************************************************
@@ -1743,14 +1769,14 @@ def machinelearningBuildModel():
     h2o_automl = H2OAutoML(sort_metric='mse', max_runtime_secs=ML_MAX_RUNTIME_SECS, seed=666)
     h2o_automl.train(x=x, y=y, training_frame=h2o_frame)
 
-    # Show final leaderboard of AutoML machine learning to user  
+    # Show final leaderboard of AutoML machine learning to user
     h2o_models = h2o.automl.get_leaderboard(h2o_automl, extra_columns = "ALL")
     print(h2o_models)
 
     # Delete any existing models
     machinelearningDeleteSavedModels()
 
-    # Save 'leader', ie. most optimized model, of all machine learning models 
+    # Save 'leader', ie. most optimized model, of all machine learning models
     h2o.save_model(model=h2o_automl.leader, path=ML_FOLDER, force=True)
 
 def machinelearningTestModel(df_test):
@@ -1824,14 +1850,14 @@ def machinelearningPrepareTrainingData():
 
     return df_train
 
-def machinelearningRunModelOnSamplingGrid():
+def machinelearningRunModelOnSamplingGrid(raster_resolution):
     """
     Runs machine learning model on sample grid
     """
 
     global OUTPUT_DATA_SAMPLEGRID
 
-    output_data = OUTPUT_DATA_SAMPLEGRID
+    output_data = buildOutputPath(OUTPUT_DATA_SAMPLEGRID, raster_resolution)
 
     # Initialize machine learning
     machinelearningInitialize()
@@ -1843,12 +1869,12 @@ def machinelearningRunModelOnSamplingGrid():
     df_samplegrid['date_time'] = pd.to_datetime(df_samplegrid['project_date_end'], format='%Y-%m-%d')
     df_samplegrid = df_samplegrid.set_index('date_time').sort_index()
 
-    # Make copy of sample grid before we make further changes so we 
+    # Make copy of sample grid before we make further changes so we
     # can use when generating output results (GeoJSON or GeoTIFF)
     df_original = df_samplegrid.copy()
 
     # Remove extraneous columns
-    for column_to_remove in ML_IGNORE_COLUMNS: 
+    for column_to_remove in ML_IGNORE_COLUMNS:
         if column_to_remove in df_samplegrid:
             df_samplegrid = df_samplegrid.drop(column_to_remove, axis=1)
 
@@ -1865,17 +1891,17 @@ def machinelearningRunModelOnSamplingGrid():
     df_predicted = y_pred.as_data_frame().to_numpy().ravel()
     print(y_pred.as_data_frame())
 
-    machinelearningOutputGridResults(df_original, df_predicted)
+    machinelearningOutputGridResults(raster_resolution, df_original, df_predicted)
 
-def machinelearningOutputGridResults(df_original, df_predicted):
+def machinelearningOutputGridResults(raster_resolution, df_original, df_predicted):
     """
     Output results of machine learning predictions for array of points
     """
 
     global OUTPUT_ML_GEOJSON, OUTPUT_ML_RASTER
-    
-    output_ml_geojson = OUTPUT_ML_GEOJSON
-    output_ml_geotiff = OUTPUT_ML_RASTER
+
+    output_ml_geojson = buildOutputPath(OUTPUT_ML_GEOJSON, raster_resolution)
+    output_ml_geotiff = buildOutputPath(OUTPUT_ML_RASTER, raster_resolution)
 
     features = []
     count = 0
@@ -1889,7 +1915,7 @@ def machinelearningOutputGridResults(df_original, df_predicted):
             'geometry': {
                 'type': 'Point',
                 'coordinates': [
-                    row['turbine_lnglat_lng'], 
+                    row['turbine_lnglat_lng'],
                     row['turbine_lnglat_lat']
                 ]
             }
@@ -1898,14 +1924,14 @@ def machinelearningOutputGridResults(df_original, df_predicted):
         count += 1
 
     featurecollection = {
-        'type': 'FeatureCollection', 
+        'type': 'FeatureCollection',
         'features': features
     }
 
     with open(output_ml_geojson, "w", encoding='UTF-8') as writerfileobj:
         json.dump(featurecollection, writerfileobj, ensure_ascii=False, indent=4)
 
-    createRasterFromGeoJSON(output_ml_geojson, output_ml_geotiff)
+    createRasterFromGeoJSON(raster_resolution, output_ml_geojson, output_ml_geotiff)
 
 
 # ***********************************************************
@@ -1927,7 +1953,7 @@ def amalgamateNonUKtables():
         if basic_unprocessed_table in TABLES_TO_EXCLUDE: continue
         postgisProcessTable(basic_unprocessed_table, buildProcessedTableName(basic_unprocessed_table))
 
-    # Iterate through all processed basic tables and create 
+    # Iterate through all processed basic tables and create
     # list of all amalgamations that need to exist
 
     processed_tables = postgisGetBasicProcessedTables()
@@ -1983,7 +2009,7 @@ def osmDownloadData():
             yaml_content_keys = list(yaml_content.keys())
             if len(yaml_content_keys) == 0: continue
 
-            for yaml_content_key in yaml_content_keys: 
+            for yaml_content_key in yaml_content_keys:
                 yaml_all_content[yaml_content_key] = yaml_content[yaml_content_key]
 
         with open(yaml_all_filename, "w") as yaml_file: yaml_file.write(yaml.dump(yaml_all_content))
@@ -2006,7 +2032,7 @@ def osmDownloadData():
                                     "SELECT geom geometry FROM '" + clipping_union_table + "'", \
                                     "--config", "OGR_PG_ENABLE_METADATA", "NO" ])
 
-        runSubprocess(["osm-export-tool", DATASETS_FOLDER + basename(OSM_MAIN_DOWNLOAD), OSM_EXPORT_DATA, "-m", yaml_all_filename, "--clip", OVERALL_CLIPPING_FILE])
+        runSubprocess(['/bin/bash', "./osm-export.sh", DATASETS_FOLDER + basename(OSM_MAIN_DOWNLOAD), OSM_EXPORT_DATA, "-m", yaml_all_filename, "--clip", OVERALL_CLIPPING_FILE])
 
     with open(yaml_all_filename) as stream:
         try:
@@ -2015,7 +2041,7 @@ def osmDownloadData():
             LogMessage(exc)
             exit()
 
-    if yaml_content is not None: 
+    if yaml_content is not None:
         yaml_content_keys = list(yaml_content.keys())
 
         for yaml_content_key in yaml_content_keys:
@@ -2056,7 +2082,7 @@ def findErrorTurbines():
     Find all turbines with missing distance error
     """
 
-    # Get list of tables to run distance testing on    
+    # Get list of tables to run distance testing on
     tables_to_test_unprojected = removeNonEssentialTablesForDistance(postgisGetUKBasicProcessedTables())
 
     # Creates reprojected version of all testing tables to improve performance
@@ -2126,6 +2152,59 @@ def exportGeoJSONWindTurbines():
 
         postgisExportExplodedDataset(WINDTURBINES_OPERATIONAL_DATASET, windturbines_operational_path, 'POINT')
 
+def generateHistoricalFootpathsForTurbine(turbine_parameters):
+    """
+    Deletes turbine-generated footpaths for turbine with id turbine_fid
+    """
+
+    global FOOTPATHS_SINGLELINES_DATASET, FOOTPATHS_HISTORICAL_DATASET, WINDTURBINES_OPERATIONAL_DATASET
+    global MAXIMUM_DISTANCE_ENDPOINT, MAXIMUM_DISTANCE_LINE
+
+    turbine_fid, turbine_index = turbine_parameters[0], turbine_parameters[1]
+
+    footpaths_historical_table = reformatTableName(FOOTPATHS_HISTORICAL_DATASET) + '__pro__27700'
+    windturbines_operational_table = reformatTableName(WINDTURBINES_OPERATIONAL_DATASET)
+
+    with cnt.get_lock():
+        if (cnt.value % 1000) == 0: LogMessage(" --> Deleting turbine-specific footpaths for turbine " + str(cnt.value))
+        cnt.value += 1
+
+    scratch_table_1 = '_scratch_historical_footpaths_' + str(turbine_index)
+
+    if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+
+    # Create 1km search bounding box to speed up MIN(ST_Distance)
+    postgisExec("CREATE TABLE %s AS SELECT ST_Envelope(ST_Buffer(ST_Transform(geom, 27700), 1000)) geom FROM %s WHERE fid=%s;", (AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid))
+
+    num_deleted_startend = postgisExecDelete("""
+    DELETE FROM %s footpath 
+    WHERE 
+    ST_Intersects(footpath.geom, (SELECT geom FROM %s)) AND
+    (
+    ((SELECT MIN(ST_Distance(ST_StartPoint(footpath.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s) OR 
+    ((SELECT MIN(ST_Distance(ST_EndPoint(footpath.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)
+    );
+    """, \
+    (   AsIs(footpaths_historical_table), \
+        AsIs(scratch_table_1), \
+        AsIs(windturbines_operational_table), \
+        turbine_fid,\
+        AsIs(MAXIMUM_DISTANCE_ENDPOINT), \
+        AsIs(windturbines_operational_table), \
+        turbine_fid,\
+        AsIs(MAXIMUM_DISTANCE_ENDPOINT), ))
+
+    num_deleted_length = postgisExecDelete("""
+    DELETE FROM %s footpath 
+    WHERE 
+    ST_Intersects(footpath.geom, (SELECT geom FROM %s)) AND
+    ((SELECT MIN(ST_Distance(footpath.geom, ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s);
+    """, \
+    (AsIs(footpaths_historical_table), AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid, AsIs(MAXIMUM_DISTANCE_LINE), ))
+
+    if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+
+
 def generateHistoricalFootpaths():
     """
     Process footpaths to remove those likely to have been created to provide access to new turbines
@@ -2150,56 +2229,80 @@ def generateHistoricalFootpaths():
 
         LogMessage("Historical footpaths recreation: Retrieving operational turbines")
 
-        operational_turbines = postgisGetResults("SELECT fid FROM %s;", (AsIs(windturbines_operational_table), ))
+        operational_turbines = postgisGetResults("SELECT fid FROM %s ORDER BY fid;", (AsIs(windturbines_operational_table), ))
 
         LogMessage("Historical footpaths recreation: Deleting turbine-specific footpaths...")
 
-        for count in range(len(operational_turbines)):
+        cnt = Value('i', 0)
+        turbine_fids = []
+        for i in range(len(operational_turbines)):
+            turbine_fids.append([operational_turbines[i][0] , i])
 
-            turbine_fid = operational_turbines[count][0]
+        LogMessage("************************************************")
+        LogMessage("********** STARTING MULTIPROCESSING ************")
+        LogMessage("************************************************")
 
-            scratch_table_1 = '_scratch_table_10'
+        # Run multiprocessing pool
+        with Pool(initializer=init_globals, initargs=(cnt,)) as p:
+            p.map(generateHistoricalFootpathsForTurbine, turbine_fids)
 
-            if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
-
-            # Create 1km search bounding box to speed up MIN(ST_Distance)
-            postgisExec("CREATE TABLE %s AS SELECT ST_Envelope(ST_Buffer(ST_Transform(geom, 27700), 1000)) geom FROM %s WHERE fid=%s;", (AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid))
-            
-            num_deleted_startend = postgisExecDelete("""
-            DELETE FROM %s footpath 
-            WHERE 
-            ST_Intersects(footpath.geom, (SELECT geom FROM %s)) AND
-            (
-            ((SELECT MIN(ST_Distance(ST_StartPoint(footpath.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s) OR 
-            ((SELECT MIN(ST_Distance(ST_EndPoint(footpath.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)
-            );
-            """, \
-            (   AsIs(footpaths_historical_table), \
-                AsIs(scratch_table_1), \
-                AsIs(windturbines_operational_table), \
-                turbine_fid,\
-                AsIs(MAXIMUM_DISTANCE_ENDPOINT), \
-                AsIs(windturbines_operational_table), \
-                turbine_fid,\
-                AsIs(MAXIMUM_DISTANCE_ENDPOINT), ))
-
-            num_deleted_length = postgisExecDelete("""
-            DELETE FROM %s footpath 
-            WHERE 
-            ST_Intersects(footpath.geom, (SELECT geom FROM %s)) AND
-            ((SELECT MIN(ST_Distance(footpath.geom, ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s);
-            """, \
-            (AsIs(footpaths_historical_table), AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid, AsIs(MAXIMUM_DISTANCE_LINE), ))
-
-            if (num_deleted_startend == 0) and (num_deleted_length == 0):
-                LogMessage(" --> Deleting turbine-specific footpaths for turbine: " + str(count + 1) + "/" + str(len(operational_turbines)))
-            else:
-                LogMessage(" --> Deleting turbine-specific footpaths for turbine: " + str(count + 1) + "/" + str(len(operational_turbines)) + \
-                            " - deleted " + str(num_deleted_startend) + " endpoint-related, " + str(num_deleted_length) + " length-related")
-
-            if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+        LogMessage("************************************************")
+        LogMessage("*********** ENDING MULTIPROCESSING *************")
+        LogMessage("************************************************")
 
     LogMessage("Historical footpaths recreation: COMPLETED")
+
+def generateHistoricalMinorRoadsForTurbine(turbine_parameters):
+    """
+    Deletes turbine-generated minor roads for turbine with id turbine_fid
+    """
+
+    global FOOTPATHS_SINGLELINES_DATASET, FOOTPATHS_HISTORICAL_DATASET, WINDTURBINES_OPERATIONAL_DATASET
+    global MAXIMUM_DISTANCE_ENDPOINT, MAXIMUM_DISTANCE_LINE
+
+    turbine_fid, turbine_index = turbine_parameters[0], turbine_parameters[1]
+
+    minorroads_historical_table = reformatTableName(MINORROADS_HISTORICAL_DATASET) + '__pro__27700'
+    windturbines_operational_table = reformatTableName(WINDTURBINES_OPERATIONAL_DATASET)
+
+    with cnt.get_lock():
+        if (cnt.value % 1000) == 0: LogMessage(" --> Deleting turbine-specific minor roads for turbine " + str(cnt.value))
+        cnt.value += 1
+
+    scratch_table_1 = '_scratch_historical_minorroads_' + str(turbine_index)
+
+    if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+
+    # Create 1km search bounding box to speed up MIN(ST_Distance)
+    postgisExec("CREATE TABLE %s AS SELECT ST_Envelope(ST_Buffer(ST_Transform(geom, 27700), 1000)) geom FROM %s WHERE fid=%s;", (AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid))
+
+    num_deleted_startend = postgisExecDelete("""
+    DELETE FROM %s minorroad 
+    WHERE 
+    ST_Intersects(minorroad.geom, (SELECT geom FROM %s)) AND
+    minorroad.highway = 'service' AND 
+    (
+        ((SELECT MIN(ST_Distance(ST_StartPoint(minorroad.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s) OR 
+        ((SELECT MIN(ST_Distance(ST_EndPoint(minorroad.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)
+    )""", \
+    (   AsIs(minorroads_historical_table), \
+        AsIs(scratch_table_1), \
+        AsIs(windturbines_operational_table), \
+        turbine_fid,\
+        AsIs(MAXIMUM_DISTANCE_ENDPOINT), \
+        AsIs(windturbines_operational_table), \
+        turbine_fid,\
+        AsIs(MAXIMUM_DISTANCE_ENDPOINT), ))
+
+    num_deleted_length = postgisExecDelete("""
+    DELETE FROM %s minorroad 
+    WHERE 
+    ST_Intersects(minorroad.geom, (SELECT geom FROM %s)) AND
+    minorroad.highway = 'service' AND
+    ((SELECT MIN(ST_Distance(minorroad.geom, ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)""", \
+    (AsIs(minorroads_historical_table), AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid, AsIs(MAXIMUM_DISTANCE_LINE), ))
+
+    if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
 
 def generateHistoricalMinorRoads():
     """
@@ -2227,54 +2330,26 @@ def generateHistoricalMinorRoads():
 
         LogMessage("Historical minor roads recreation: Retrieving operational turbines")
 
-        operational_turbines = postgisGetResults("SELECT fid FROM %s;", (AsIs(windturbines_operational_table), ))
+        operational_turbines = postgisGetResults("SELECT fid FROM %s ORDER BY fid;", (AsIs(windturbines_operational_table), ))
 
         LogMessage("Historical minor roads recreation: Deleting turbine-specific minor service roads...")
 
-        for count in range(len(operational_turbines)):
+        cnt = Value('i', 0)
+        turbine_fids = []
+        for i in range(len(operational_turbines)):
+            turbine_fids.append([operational_turbines[i][0] , i])
 
-            turbine_fid = operational_turbines[count][0]
+        LogMessage("************************************************")
+        LogMessage("********** STARTING MULTIPROCESSING ************")
+        LogMessage("************************************************")
 
-            scratch_table_1 = '_scratch_table_10'
+        # Run multiprocessing pool
+        with Pool(initializer=init_globals, initargs=(cnt,)) as p:
+            p.map(generateHistoricalMinorRoadsForTurbine, turbine_fids)
 
-            if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
-
-            # Create 1km search bounding box to speed up MIN(ST_Distance)
-            postgisExec("CREATE TABLE %s AS SELECT ST_Envelope(ST_Buffer(ST_Transform(geom, 27700), 1000)) geom FROM %s WHERE fid=%s;", (AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid))
-
-            num_deleted_startend = postgisExecDelete("""
-            DELETE FROM %s minorroad 
-            WHERE 
-            ST_Intersects(minorroad.geom, (SELECT geom FROM %s)) AND
-            minorroad.highway = 'service' AND 
-            (
-                ((SELECT MIN(ST_Distance(ST_StartPoint(minorroad.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s) OR 
-                ((SELECT MIN(ST_Distance(ST_EndPoint(minorroad.geom), ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)
-            )""", \
-            (   AsIs(minorroads_historical_table), \
-                AsIs(scratch_table_1), \
-                AsIs(windturbines_operational_table), \
-                turbine_fid,\
-                AsIs(MAXIMUM_DISTANCE_ENDPOINT), \
-                AsIs(windturbines_operational_table), \
-                turbine_fid,\
-                AsIs(MAXIMUM_DISTANCE_ENDPOINT), ))
-
-            num_deleted_length = postgisExecDelete("""
-            DELETE FROM %s minorroad 
-            WHERE 
-            ST_Intersects(minorroad.geom, (SELECT geom FROM %s)) AND
-            minorroad.highway = 'service' AND
-            ((SELECT MIN(ST_Distance(minorroad.geom, ST_Transform(turbine.geom, 27700))) FROM (SELECT geom FROM %s WHERE fid=%s) turbine) < %s)""", \
-            (AsIs(minorroads_historical_table), AsIs(scratch_table_1), AsIs(windturbines_operational_table), turbine_fid, AsIs(MAXIMUM_DISTANCE_LINE), ))
-
-            if (num_deleted_startend == 0) and (num_deleted_length == 0):
-                LogMessage(" --> Deleting turbine-specific minor service roads for turbine: " + str(count + 1) + "/" + str(len(operational_turbines)))
-            else:
-                LogMessage(" --> Deleting turbine-specific minor service roads for turbine: " + str(count + 1) + "/" + str(len(operational_turbines)) + \
-                            " - deleted " + str(num_deleted_startend) + " endpoint-related, " + str(num_deleted_length) + " length-related")
-
-            if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+        LogMessage("************************************************")
+        LogMessage("*********** ENDING MULTIPROCESSING *************")
+        LogMessage("************************************************")
 
     LogMessage("Historical minor roads recreation: COMPLETED")
 
@@ -2347,8 +2422,8 @@ def importAllWindProjects():
     """
 
     global WINDTURBINES_ALLPROJECTS_URL, DATASETS_FOLDER, WINDTURBINES_ALLPROJECTS_DATASET
-    
-    onshore_allprojects_dataset_path = DATASETS_FOLDER + WINDTURBINES_ALLPROJECTS_DATASET + '.geojson' 
+
+    onshore_allprojects_dataset_path = DATASETS_FOLDER + WINDTURBINES_ALLPROJECTS_DATASET + '.geojson'
 
     if not isfile(onshore_allprojects_dataset_path):
 
@@ -2358,8 +2433,8 @@ def importAllWindProjects():
 
         LogMessage("Failed and successful wind turbines downloaded")
 
-    if not postgisCheckTableExists(WINDTURBINES_ALLPROJECTS_DATASET): 
-        
+    if not postgisCheckTableExists(WINDTURBINES_ALLPROJECTS_DATASET):
+
         LogMessage("Importing all failed and successful wind turbine projects...")
 
         postgisImportDatasetGIS(onshore_allprojects_dataset_path, WINDTURBINES_ALLPROJECTS_DATASET)
@@ -2375,7 +2450,7 @@ def importAllWindProjects():
         LogMessage("Snapping all OSM turbine positions from historical import to latest OSM turbine positions...")
 
         # We assume if operational turbine is within 50 metres of imported OSM turbine position then operational turbine should replace imported position
-         
+
         postgisExec("""
         UPDATE 
             windturbines_all_projects__uk allprojects
@@ -2465,7 +2540,7 @@ def getApprovedBeforeDateWithinDistance(radiuspoints, date):
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_end'] != None]
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_end'] < datetime.strptime(date, '%Y-%m-%d').date()]
     radiuspoints = radiuspoints[radiuspoints['project_status'].isin(['Decommissioned', 'Application Granted', 'Awaiting Construction', 'Under Construction', 'Operational'])]
-    
+
     return len(radiuspoints)
 
 
@@ -2480,7 +2555,7 @@ def getAppliedBeforeDateWithinDistance(radiuspoints, date):
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_start'] != None]
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_start'] < datetime.strptime(date, '%Y-%m-%d').date()]
     radiuspoints = radiuspoints[radiuspoints['project_status'].isin(['Application Submitted', 'Appeal Lodged'])]
-    
+
     return len(radiuspoints)
  
 def getRejectedBeforeDateWithinDistance(radiuspoints, date):
@@ -2494,7 +2569,7 @@ def getRejectedBeforeDateWithinDistance(radiuspoints, date):
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_end'] != None]
     radiuspoints = radiuspoints.loc[radiuspoints['project_date_end'] < datetime.strptime(date, '%Y-%m-%d').date()]
     radiuspoints = radiuspoints[radiuspoints['project_status'].isin(['Application Refused', 'Appeal Refused', 'Appeal Withdrawn'])]
-    
+
     return len(radiuspoints)
 
 def initialiseAllLargeWindProjectsDataFrame():
@@ -2596,7 +2671,7 @@ def getAppliedBeforeDateWithinDistanceLegacy(date, position, distance):
     ST_Distance(ST_SetSRID(ST_MakePoint(%s, %s), 27700), geom_27700) < %s;
     """, (date, position['x'], position['y'], distance, ))
     return results[0][0]
- 
+
 def getRejectedBeforeDateWithinDistanceLegacy(date, position, distance):
     """
     Gets number of rejected wind turbines before 'date' and within 'distance'
@@ -2895,7 +2970,7 @@ def getSpecificCensusSingleGeography(position, category):
     delete_fields = ['ogc_fid', 'geo_code', 'date', 'geography', 'geom']
     # Existing age data is broken down by year which is too much granularity so aggregate
     final_result = result
-    if category == 'age': 
+    if category == 'age':
         finalresults = groupAgeData(result)
     else:
         for field in final_result.keys():
@@ -2949,7 +3024,7 @@ def groupAgeData(result):
             if (median is None) and (median_count >= median_position): median = individual_step_index
 
         if step_index == (steps - 1):
-            step_end += 1 
+            step_end += 1
             last_age_frequency = int(result['age_' + str(step_end)])
             weighted_total += (step_end * last_age_frequency)
             step_total += last_age_frequency
@@ -3003,7 +3078,7 @@ def getSpecificCensusSearchRadius(position, category, radius):
     for field in aggregateresults.keys():
         if 'total' in field: continue
         finalresults[field + '__prop'] = aggregateresults[field] / total
-    
+
     return finalresults
 
 def getCensus(position, radius=None, year='2011'):
@@ -3031,7 +3106,7 @@ def getCensus(position, radius=None, year='2011'):
             data_field_readable = data_field.replace('__prop', '_proportional')
             final_fields[data_field_readable] = census_data[data_field]
 
-    return final_fields    
+    return final_fields
 
 def getCountry(position):
     """
@@ -3055,7 +3130,7 @@ def getGeometryType(table):
 
     global GEOMETRY_TYPES_LOOKUP
 
-    if table not in GEOMETRY_TYPES_LOOKUP: 
+    if table not in GEOMETRY_TYPES_LOOKUP:
 
         results = postgisGetResultsAsDict("SELECT ST_GeometryType(geom) type, COUNT(*) count FROM %s GROUP BY ST_GeometryType(geom) ORDER BY count DESC;", (AsIs(table), ))
         GEOMETRY_TYPES_LOOKUP[table] = results[0]['type']
@@ -3098,8 +3173,8 @@ def getOverlapMetrics(source_table, overlay_table):
 
 def filterRelevantViewshedLayers(tables):
     """
-    Due to computationally intensive nature of calculating viewshed overlaps, 
-    artificially restrict calculations to those layers we a priori think are 
+    Due to computationally intensive nature of calculating viewshed overlaps,
+    artificially restrict calculations to those layers we a priori think are
     likely to be relevant
     """
 
@@ -3124,7 +3199,7 @@ def filterRelevantViewshedLayers(tables):
             if relevant_layer in table: 
                 output_tables.append(table)
                 continue
-    
+
     return output_tables
 
 def getViewshedOverlaps(position, height, categories):
@@ -3134,7 +3209,7 @@ def getViewshedOverlaps(position, height, categories):
 
     global VIEWSHED_RADIUS
 
-    # Artificially limit categories to save time 
+    # Artificially limit categories to save time
     # Not ideal... ideally you run things for every layer
     # without judging in advance which might be relevant
 
@@ -3142,7 +3217,7 @@ def getViewshedOverlaps(position, height, categories):
 
     # In some cases, we have mix of geometries and need to homogenise how
     # we count any overlap. For example listed buildings are polygons in England
-    # but points in Scotland so if we judge source table by most numerous 
+    # but points in Scotland so if we judge source table by most numerous
     # geometry type, we will discount less numerous - but still crucial - geometries
     # Therefore:
     # - Listed building points given 50 metre radius circle
@@ -3191,9 +3266,9 @@ def getViewshedOverlaps(position, height, categories):
                 parametername = 'number_points'
                 finalvalue = overlapmetrics['number_points']
             if geometrytype == 'ST_LineString': 
-                parametername = 'line_length'                
+                parametername = 'line_length'
                 finalvalue = overlapmetrics['line_length']
-            if geometrytype == 'ST_Polygon': 
+            if geometrytype == 'ST_Polygon':
                 parametername = 'area'
                 finalvalue = overlapmetrics['area']
 
@@ -3220,14 +3295,92 @@ def getAllProjectNames():
 
     return names
 
+def createTableDistanceCache(table_parameters):
+    """
+    Creates distance cache for specific table
+    """
+
+    global DISTANCE_CACHE_TABLE, WINDTURBINES_ALLPROJECTS_DATASET
+
+    table, table_index, table_count = table_parameters[0], table_parameters[1], table_parameters[2]
+    search_bounding_box_size = 10000
+    windturbines_all_table = reformatTableName(WINDTURBINES_ALLPROJECTS_DATASET)
+
+    LogMessage("************ STARTING DISTANCE CACHE CREATION: " + table + " ************")
+    LogMessage("Creating bulk point-to-feature distance cache for table: " + table + " (" + str(table_index) + "/" + str(table_count) + ")")
+    postgisExec("DELETE FROM %s WHERE table_name = %s", (AsIs(DISTANCE_CACHE_TABLE), table, ))
+
+    all_turbines = postgisGetResults("SELECT ogc_fid FROM %s;", (AsIs(windturbines_all_table), ))
+    number_turbines = len(all_turbines)
+    scratch_table_1 = '_sp_dis_' + table
+
+    num_outside_bounding_box = 0
+    for count in range(len(all_turbines)):
+
+        if count % 1000 == 0:
+            LogMessage("Getting minimum distance to " + table + " for turbine: " + str(count + 1) + "/" + str(number_turbines))
+
+        turbine_fid = all_turbines[count][0]
+
+        if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+
+        # Create search bounding box to speed up MIN(ST_Distance)
+        postgisExec("""
+        CREATE TABLE %s AS
+        SELECT dataset.geom FROM %s dataset, 
+        (SELECT ST_Envelope(ST_Buffer(ST_Transform(geom, 27700), %s)) geom FROM %s WHERE ogc_fid=%s) boundingbox
+        WHERE ST_Intersects(dataset.geom, boundingbox.geom);
+        """, (AsIs(scratch_table_1), AsIs(table), AsIs(search_bounding_box_size), AsIs(windturbines_all_table), turbine_fid))
+        postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_1 + "_idx"), AsIs(scratch_table_1), ))
+
+        # Check to see if any features within bounding box
+        # - if no, use global search
+        # - if yes, use to select nearest feature
+
+        num_features = postgisGetResults("SELECT COUNT(*) FROM %s;", (AsIs(scratch_table_1), ))
+        num_features = num_features[0][0]
+        if num_features == 0: search_table = table
+        else: search_table = scratch_table_1
+
+        if num_features == 0: 
+            # LogMessage("No features found within bounding box of turbine " + str(turbine_fid) + " for " + table)
+            num_outside_bounding_box += 1
+        else:
+            num_outside_bounding_box -= 1
+
+        postgisExec("""
+        INSERT INTO %s 
+        SELECT %s AS ogc_fid, %s AS table_name, MIN(ST_Distance(ST_Transform(turbine.geom, 27700), dataset.geom)) AS distance 
+        FROM (SELECT ogc_fid, geom FROM %s WHERE ogc_fid=%s) turbine, %s dataset GROUP BY turbine.ogc_fid
+        """, (AsIs(DISTANCE_CACHE_TABLE), AsIs(turbine_fid), table, AsIs(windturbines_all_table), AsIs(turbine_fid), AsIs(search_table), ))
+
+        postgisExec("""
+        UPDATE %s cache SET distance = 
+        (
+            SELECT -MIN(ST_Distance(ST_Transform(turbine.geom, 27700), ST_ExteriorRing(dataset.geom))) FROM 
+            windturbines_all_projects__uk turbine, %s dataset
+            WHERE turbine.ogc_fid = cache.ogc_fid AND ST_Contains(dataset.geom, ST_Transform(turbine.geom, 27700))
+        )
+        WHERE 
+        cache.distance = 0 AND cache.table_name = %s AND cache.ogc_fid = %s;
+        """, (AsIs(DISTANCE_CACHE_TABLE), AsIs(search_table), table, AsIs(turbine_fid), ))
+
+        # If bounding box consistently too small then double size (as many times as necessary until excluded numbers drop)
+        if num_outside_bounding_box > 50:
+            search_bounding_box_size = (search_bounding_box_size * 2)
+            LogMessage("Increasing bounding box for " + table + " to " + str(search_bounding_box_size / 1000) + " km")
+            num_outside_bounding_box = 0
+
+        if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+
+    LogMessage("************ ENDING DISTANCE CACHE CREATION: " + table + " ************")
+
 def createDistanceCache(tables):
     """
     Runs efficient PostGIS queries across entire dataset to save time
     """
 
     global DISTANCE_CACHE_TABLE, WINDTURBINES_ALLPROJECTS_DATASET
-
-    search_bounding_box_size = 10000
 
     windturbines_all_table = reformatTableName(WINDTURBINES_ALLPROJECTS_DATASET)
 
@@ -3238,68 +3391,32 @@ def createDistanceCache(tables):
 
     all_turbines = postgisGetResults("SELECT ogc_fid FROM %s;", (AsIs(windturbines_all_table), ))
     number_turbines = len(all_turbines)
-    scratch_table_1 = '_scratch_table_10'
     table_index = 0
 
+    multiprocessing_tables_to_process = []
     for table in tables:
         table_index += 1
         number_cached_records = postgisGetResults("SELECT COUNT(*) FROM %s WHERE table_name = %s", (AsIs(DISTANCE_CACHE_TABLE), table, ))
         number_cached_records = number_cached_records[0][0]
         if number_cached_records != number_turbines:
-            LogMessage("Creating bulk point-to-feature distance cache for table: " + table + "(" + str(table_index) + "/" + str(len(tables)) + ")")
-            postgisExec("DELETE FROM %s WHERE table_name = %s", (AsIs(DISTANCE_CACHE_TABLE), table, ))
+            multiprocessing_tables_to_process.append([table, table_index, len(tables)])
 
-            for count in range(len(all_turbines)):
+    LogMessage("************************************************")
+    LogMessage("********** STARTING MULTIPROCESSING ************")
+    LogMessage("************************************************")
 
-                if count % 100 == 0:
-                    LogMessage("Getting minimum distance to " + table + " for turbine: " + str(count + 1) + "/" + str(number_turbines))
+    # Run multiprocessing pool
+    with Pool(None) as p:
+        p.map(createTableDistanceCache, multiprocessing_tables_to_process)
 
-                turbine_fid = all_turbines[count][0]
+    LogMessage("************************************************")
+    LogMessage("*********** ENDING MULTIPROCESSING *************")
+    LogMessage("************************************************")
 
-                if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
-
-                # Create search bounding box to speed up MIN(ST_Distance)
-                postgisExec("""
-                CREATE TABLE %s AS
-                SELECT dataset.geom FROM %s dataset, 
-                (SELECT ST_Envelope(ST_Buffer(ST_Transform(geom, 27700), %s)) geom FROM %s WHERE ogc_fid=%s) boundingbox
-                WHERE ST_Intersects(dataset.geom, boundingbox.geom);
-                """, (AsIs(scratch_table_1), AsIs(table), AsIs(search_bounding_box_size), AsIs(windturbines_all_table), turbine_fid))
-                postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_1 + "_idx"), AsIs(scratch_table_1), ))
-
-                # Check to see if any features within bounding box 
-                # - if no, use global search
-                # - if yes, use to select nearest feature
-
-                num_features = postgisGetResults("SELECT COUNT(*) FROM %s;", (AsIs(scratch_table_1), ))
-                num_features = num_features[0][0]
-                if num_features == 0: search_table = table
-                else: search_table = scratch_table_1
-
-                if num_features == 0: LogMessage("No features found within bounding box of turbine " + str(turbine_fid) + " for " + table)
-
-                postgisExec("""
-                INSERT INTO %s 
-                SELECT %s AS ogc_fid, %s AS table_name, MIN(ST_Distance(ST_Transform(turbine.geom, 27700), dataset.geom)) AS distance 
-                FROM (SELECT ogc_fid, geom FROM %s WHERE ogc_fid=%s) turbine, %s dataset GROUP BY turbine.ogc_fid
-                """, (AsIs(DISTANCE_CACHE_TABLE), AsIs(turbine_fid), table, AsIs(windturbines_all_table), AsIs(turbine_fid), AsIs(search_table), ))
-
-                postgisExec("""
-                UPDATE %s cache SET distance = 
-                (
-                    SELECT -MIN(ST_Distance(ST_Transform(turbine.geom, 27700), ST_ExteriorRing(dataset.geom))) FROM 
-                    windturbines_all_projects__uk turbine, %s dataset
-                    WHERE turbine.ogc_fid = cache.ogc_fid AND ST_Contains(dataset.geom, ST_Transform(turbine.geom, 27700))
-                )
-                WHERE 
-                cache.distance = 0 AND cache.table_name = %s AND cache.ogc_fid = %s;
-                """, (AsIs(DISTANCE_CACHE_TABLE), AsIs(search_table), table, AsIs(turbine_fid), ))
-
-                if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
 
 def createBatchGrid(batch_grid_spacing):
     """
-    Creates batch grid for multiprocessing 
+    Creates batch grid for multiprocessing
     """
 
     if batch_grid_spacing is None: return None
@@ -3310,7 +3427,7 @@ def createBatchGrid(batch_grid_spacing):
 
         LogMessage("Creating batch processing grid overlay for multiprocessing")
 
-        postgisExec("CREATE TABLE %s AS SELECT (ST_SquareGrid(%s, ST_Transform(geom, 27700))).geom geom FROM overall_clipping__union;", 
+        postgisExec("CREATE TABLE %s AS SELECT (ST_SquareGrid(%s, ST_Transform(geom, 27700))).geom geom FROM overall_clipping__union;",
                     (AsIs(batch_grid_table), AsIs(batch_grid_spacing), ))
         postgisExec("ALTER TABLE %s ADD COLUMN temp_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY", (AsIs(batch_grid_table), ))
         postgisExec("DELETE FROM %s WHERE temp_id IN (SELECT grid.temp_id FROM %s grid, overall_clipping__union clipping WHERE ST_Intersects(ST_Transform(grid.geom, 4326), clipping.geom) IS FALSE);", \
@@ -3325,13 +3442,13 @@ def createBatchGrid(batch_grid_spacing):
     LogMessage("Total number of batches: " + str(number_batches))
 
     return number_batches
-    
-def createSamplingGrid(batch_index, batch_grid_spacing):
+
+def createSamplingGrid(batch_index, batch_grid_spacing, raster_resolution):
     """
     Creates sampling grid for use in building final result maps
     """
 
-    global RASTER_RESOLUTION, SAMPLING_GRID
+    global SAMPLING_GRID
 
     if (batch_index is not None) and (batch_grid_spacing is not None):
 
@@ -3343,7 +3460,7 @@ def createSamplingGrid(batch_index, batch_grid_spacing):
 
         if not postgisCheckTableExists(batch_cell_table):
 
-            LogMessage("Creating individual batch cell for multiprocessing")
+            # LogMessage("Creating individual batch cell for multiprocessing")
 
             postgisExec("CREATE TABLE %s AS SELECT geom FROM %s WHERE id = %s", \
                         (AsIs(batch_cell_table), AsIs(batch_grid_table), batch_index, ))
@@ -3351,9 +3468,9 @@ def createSamplingGrid(batch_index, batch_grid_spacing):
 
         if postgisCheckTableExists(batch_sampling_grid): postgisDropTable(batch_sampling_grid)
 
-        LogMessage("Creating batch sampling grid for batch " + str(batch_index) + "/" + str(number_batches) + " with points spaced at " + str(RASTER_RESOLUTION) + " metres")
+        LogMessage("Creating batch sampling grid for batch " + str(batch_index) + "/" + str(number_batches) + " with points spaced at " + str(raster_resolution) + " metres")
 
-        # Note: It's important RASTER_RESOLUTION is float when sent to ST_AsRaster 
+        # Note: It's important raster_resolution is float when sent to ST_AsRaster
         # otherwise interpreted as number of rows/columns rather than size of rows/columns
         postgisExec("""
         CREATE TABLE %s AS
@@ -3367,7 +3484,7 @@ def createSamplingGrid(batch_index, batch_grid_spacing):
                 SELECT ST_Transform((ST_PixelAsCentroids(ST_AsRaster(ST_Transform(geom, 27700), %s, %s))).geom, 4326) samplepoint FROM %s WHERE id = %s
             ) samplepoints 
         );
-        """, (AsIs(batch_sampling_grid), AsIs(float(RASTER_RESOLUTION)), AsIs(float(RASTER_RESOLUTION)), AsIs(batch_grid_table), AsIs(batch_index), ))
+        """, (AsIs(batch_sampling_grid), AsIs(float(raster_resolution)), AsIs(float(raster_resolution)), AsIs(batch_grid_table), AsIs(batch_index), ))
 
         postgisExec("ALTER TABLE %s ADD COLUMN temp_id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY", (AsIs(batch_sampling_grid), ))
         postgisExec("DELETE FROM %s WHERE temp_id IN (SELECT grid.temp_id FROM %s grid, overall_clipping__union clipping WHERE ST_Intersects(grid.geom, clipping.geom) IS FALSE);", \
@@ -3378,11 +3495,11 @@ def createSamplingGrid(batch_index, batch_grid_spacing):
     else:
         if not postgisCheckTableExists(SAMPLING_GRID):
 
-            LogMessage("Creating sampling grid with points spaced at " + str(RASTER_RESOLUTION) + " metres")
+            LogMessage("Creating sampling grid with points spaced at " + str(raster_resolution) + " metres")
 
-            # Note: It's important RASTER_RESOLUTION is float when sent to ST_AsRaster 
+            # Note: It's important raster_resolution is float when sent to ST_AsRaster
             # otherwise interpreted as number of rows/columns rather than size of rows/columns
-            #  
+
             postgisExec("""
             CREATE TABLE %s AS
             (
@@ -3395,7 +3512,7 @@ def createSamplingGrid(batch_index, batch_grid_spacing):
                     SELECT ST_Transform((ST_PixelAsCentroids(ST_AsRaster(ST_Transform(geom, 27700), %s, %s))).geom, 4326) samplepoint FROM overall_clipping__union
                 ) samplepoints 
             );
-            """, (AsIs(SAMPLING_GRID), AsIs(float(RASTER_RESOLUTION)), AsIs(float(RASTER_RESOLUTION)), ))
+            """, (AsIs(SAMPLING_GRID), AsIs(float(raster_resolution)), AsIs(float(raster_resolution)), ))
             postgisExec("ALTER TABLE %s ADD COLUMN id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY;", (AsIs(SAMPLING_GRID), ))
 
 def runAdditionalDownloads():
@@ -3404,7 +3521,6 @@ def runAdditionalDownloads():
     """
 
     global CENSUS_2011_ZIP_URL, ADDITIONAL_DOWNLOADS, DATASETS_FOLDER, LOCALAUTHORITY_CONVERSIONS
-    
 
     census_2011_zip = 'census_2011.zip'
 
@@ -3458,45 +3574,45 @@ def runAdditionalDownloads():
             if len(additional_download['sql']) == 0: continue
 
             for sql in additional_download['sql']: postgisExec(sql)
-    
+
     local_authority_canonical = getJSON(LOCALAUTHORITY_CONVERSIONS)
     for conversion_from in local_authority_canonical.keys():
         conversion_to = local_authority_canonical[conversion_from]
         postgisExec('UPDATE sitepredictor__political__uk SET area = %s WHERE area = %s', (conversion_to, conversion_from, ))
         postgisExec('DELETE FROM sitepredictor__councils__uk WHERE name = %s', (conversion_from, ))
 
-def createDistanceRasters(tables, batch_index, batch_grid_spacing):
+def createDistanceRasters(raster_resolution, tables, batch_index, batch_grid_spacing):
     """
     Creates distance rasters for tables
     """
 
-    global RASTER_RESOLUTION, RASTER_OUTPUT_FOLDER
+    global RASTER_OUTPUT_FOLDER
 
     for table in tables:
 
         feature_raster = RASTER_OUTPUT_FOLDER + table + '.tif'
-        distance_raster = getDistanceRasterPath(table)
+        distance_raster = getDistanceRasterPath(raster_resolution, table)
 
-        if batch_index is None: 
-            if not isfile(distance_raster): 
-                createFeaturesRaster(table, feature_raster)
-                createDistanceRaster(feature_raster, distance_raster, batch_index, batch_grid_spacing)
+        if batch_index is None:
+            if not isfile(distance_raster):
+                createFeaturesRaster(raster_resolution, table, feature_raster)
+                createDistanceRaster(raster_resolution, feature_raster, distance_raster, batch_index, batch_grid_spacing)
         else:
-            batch_distance_raster = buildBatchRasterFilename(distance_raster, batch_index, batch_grid_spacing)
-            if not isfile(batch_distance_raster): 
-                createDistanceRaster(feature_raster, distance_raster, batch_index, batch_grid_spacing)
+            batch_distance_raster = buildBatchRasterFilename(raster_resolution, distance_raster, batch_index, batch_grid_spacing)
+            if not isfile(batch_distance_raster):
+                createDistanceRaster(raster_resolution, feature_raster, distance_raster, batch_index, batch_grid_spacing)
 
         if isfile(feature_raster): os.remove(feature_raster)
 
-def deleteDistanceRasters(tables, batch_index, batch_grid_spacing):
+def deleteDistanceRasters(raster_resolution, tables, batch_index, batch_grid_spacing):
     """
     Deletes distance rasters for tables
     """
 
     for table in tables:
 
-        distance_raster = getDistanceRasterPath(table)
-        distance_batch_output = buildBatchRasterFilename(distance_raster, batch_index, batch_grid_spacing)
+        distance_raster = getDistanceRasterPath(raster_resolution, table)
+        distance_batch_output = buildBatchRasterFilename(raster_resolution, distance_raster, batch_index, batch_grid_spacing)
         if isfile(distance_batch_output): os.remove(distance_batch_output)
 
 def createSpacedGrid(position_start, spacing_metres, num_rows, num_cols):
@@ -3528,15 +3644,15 @@ def getSampleGrid(batch_index, batch_grid_spacing):
     if batch_index is None:
         return postgisGetResultsAsDict("SELECT easting, northing, ST_X(geom) lng, ST_Y(geom) lat FROM %s ORDER BY easting, northing;", (AsIs(SAMPLING_GRID), ))
     else:
-        batch_sampling_grid = buildBatchSamplingGridTableName(batch_index, batch_grid_spacing)
-        return postgisGetResultsAsDict("SELECT easting, northing, ST_X(geom) lng, ST_Y(geom) lat FROM %s ORDER BY easting, northing;", (AsIs(batch_sampling_grid), ))
+        batch_sampling_grid_cell = buildBatchSamplingGridTableName(batch_index, batch_grid_spacing)
+        return postgisGetResultsAsDict("SELECT easting, northing, ST_X(geom) lng, ST_Y(geom) lat FROM %s ORDER BY easting, northing;", (AsIs(batch_sampling_grid_cell), ))
 
-def createTestSamplingGrid(position):
+def createTestSamplingGrid(raster_resolution, position):
     """
     Creates test sampling grid of size TEST_SAMPLING_GRID_SIZE metres that contains position
     """
 
-    global TEST_SAMPLING_GRID_SIZE, OVERALL_CLIPPING_FILE, RASTER_RESOLUTION, SAMPLING_GRID
+    global TEST_SAMPLING_GRID_SIZE, OVERALL_CLIPPING_FILE, SAMPLING_GRID
 
     test_sampling_grid_gridsquare_table = 'sitepredictor__test_sampling_grid__gridsquare'
     test_sampling_grid_gridsquare_union_table = 'sitepredictor__test_sampling_grid__gridsquare__union'
@@ -3549,9 +3665,9 @@ def createTestSamplingGrid(position):
 
     LogMessage("Creating test sampling grid with size " + str(TEST_SAMPLING_GRID_SIZE) + " metres")
 
-    postgisExec("CREATE TABLE %s AS SELECT ST_Transform((ST_SquareGrid(%s, ST_Transform(geom, 27700))).geom, 4326) geom FROM %s;", 
+    postgisExec("CREATE TABLE %s AS SELECT ST_Transform((ST_SquareGrid(%s, ST_Transform(geom, 27700))).geom, 4326) geom FROM %s;",\
                 (AsIs(test_sampling_grid_gridsquare_table), AsIs(TEST_SAMPLING_GRID_SIZE), AsIs(clipping_union_table), ))
-        
+
     LogMessage("Removing any grid squares not containing point [" + str(position['lng']) + "," + str(position['lat']) + "]")
 
     postgisExec("DELETE FROM %s WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) = FALSE", (AsIs(test_sampling_grid_gridsquare_table), position['lng'], position['lat'], ))
@@ -3560,11 +3676,11 @@ def createTestSamplingGrid(position):
 
     postgisExec("CREATE TABLE %s AS SELECT ST_Union(geom) geom FROM %s", (AsIs(test_sampling_grid_gridsquare_union_table), AsIs(test_sampling_grid_gridsquare_table), ))
 
-    LogMessage("Filling test sampling grid with points spaced at " + str(RASTER_RESOLUTION) + " metres")
+    LogMessage("Filling test sampling grid with points spaced at " + str(raster_resolution) + " metres")
 
-    # Note: It's important RASTER_RESOLUTION is float when sent to ST_AsRaster 
+    # Note: It's important raster_resolution is float when sent to ST_AsRaster
     # otherwise interpreted as number of rows/columns rather than size of rows/columns
-    #  
+
     postgisExec("""
     CREATE TABLE %s AS
     (
@@ -3577,20 +3693,51 @@ def createTestSamplingGrid(position):
             SELECT ST_Transform((ST_PixelAsCentroids(ST_AsRaster(ST_Transform(geom, 27700), %s, %s))).geom, 4326) samplepoint FROM %s
         ) samplepoints 
     );
-    """, (AsIs(SAMPLING_GRID), AsIs(float(RASTER_RESOLUTION)), AsIs(float(RASTER_RESOLUTION)), AsIs(test_sampling_grid_gridsquare_union_table), ))
+    """, (AsIs(SAMPLING_GRID), AsIs(float(raster_resolution)), AsIs(float(raster_resolution)), AsIs(test_sampling_grid_gridsquare_union_table), ))
     postgisExec("ALTER TABLE %s ADD COLUMN id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY;", (AsIs(SAMPLING_GRID), ))
 
+def getSamplingGridBatchNumberPoints(batch_parameters):
+    """
+    Get total number of points for single batch grid square
+    """
+
+    batch_index, batch_grid_spacing, raster_resolution = batch_parameters[0], batch_parameters[1], batch_parameters[2]
+    batch_cell_table = buildBatchCellTableName(batch_index, batch_grid_spacing)
+    batch_sampling_grid_table = buildBatchSamplingGridTableName(batch_index, batch_grid_spacing)
+    createSamplingGrid(batch_index, batch_grid_spacing, raster_resolution)
+    if postgisCheckTableExists(batch_sampling_grid_table): 
+        points_in_batch = postgisGetResults("SELECT COUNT(*) FROM %s;", (AsIs(batch_sampling_grid_table), ))
+        points_in_batch = points_in_batch[0][0]
+        with cnt.get_lock(): cnt.value += points_in_batch
+        postgisDropTable(batch_sampling_grid_table)
+    if postgisCheckTableExists(batch_cell_table): postgisDropTable(batch_cell_table)
+
+def getSamplingGridNumberPoints(batch_grid_spacing, batch_number, raster_resolution):
+    """
+    Get total number of points by adding points within each batch grid square
+    """
+
+    number_points = 0
+
+    multiprocessing_batch_values = [[batch_index, batch_grid_spacing, raster_resolution] for batch_index in range(1, (batch_number + 1))]
+
+    cnt = Value('i', 0)
+    # Run multiprocessing pool
+    with Pool(initializer=init_globals, initargs=(cnt,)) as p:
+        p.map(getSamplingGridBatchNumberPoints, multiprocessing_batch_values)
+
+    return cnt.value
 
 def createSamplingGridData(batch_values):
     """
     Generates sampling grid data, ie. same features created for all failed/successful wind turbines but for all sampling grid points
     """
 
-    global RASTER_RESOLUTION, OUTPUT_DATA_SAMPLEGRID
+    global OUTPUT_DATA_SAMPLEGRID
 
-    batch_index, batch_grid_spacing = None, None
+    batch_index, batch_grid_spacing, raster_resolution = None, None, None
     if (batch_values is not None):
-        batch_index, batch_grid_spacing = batch_values[0], batch_values[1]
+        batch_index, batch_grid_spacing, raster_resolution = batch_values[0], batch_values[1], batch_values[2]
 
     LogMessage("========================================")
     LogMessage("== Starting batch: " + str(batch_index) + " " + str(batch_grid_spacing))
@@ -3600,27 +3747,27 @@ def createSamplingGridData(batch_values):
     # ******************* CREATE SAMPLING GRID *******************
     # ************************************************************
     #
-    # * Use below to test on single small grid square covering specific point *
+    # Use below to test on single small grid square covering specific point
     # ------------------------------------------------------------
     # point = {'lng': 0, 'lat': 51}
-    # createTestSamplingGrid(point)
+    # createTestSamplingGrid(raster_resolution, point)
     # ------------------------------------------------------------
     #
     # Default, below, is to create sampling grid for whole of UK
     # If batch_index/batch_grid_spacing are set:
     # - Cut up UK into grid squares spaced at batch_grid_spacing metres
     # - Select grid square with index 'batch_index'
-    createSamplingGrid(batch_index, batch_grid_spacing)
+    createSamplingGrid(batch_index, batch_grid_spacing, raster_resolution)
 
 
     # ************************************************************
     # ***************** CREATE DISTANCE RASTERS ******************
     # ************************************************************
 
-    # Create distance rasters to improve performance 
+    # Create distance rasters to improve performance
     # - faster than querying PostGIS for every position
 
-    # Get list of tables to run distance testing on    
+    # Get list of tables to run distance testing on
     tables_to_test_unprojected = removeNonEssentialTablesForDistance(postgisGetUKBasicProcessedTables())
 
     # Creates reprojected version of all testing tables to improve performance
@@ -3630,42 +3777,42 @@ def createSamplingGridData(batch_values):
 
     tables_to_test = removeNonEssentialTablesForDistance(tables_to_test)
 
-    createDistanceRasters(tables_to_test, batch_index, batch_grid_spacing)
+    createDistanceRasters(raster_resolution, tables_to_test, batch_index, batch_grid_spacing)
 
     # ************************************************************
     # ********* LOAD SAMPLED POINTS AND START PROCESSING *********
     # ************************************************************
 
-    LogMessage("Retrieving all points from sample grid with spacing: " + str(RASTER_RESOLUTION) + " metres")
+    LogMessage("Retrieving all points from sample grid with spacing: " + str(raster_resolution) + " metres")
 
     sample_grid = getSampleGrid(batch_index, batch_grid_spacing)
-    
+
     LogMessage("Number of points in sample grid: " + str(len(sample_grid)))
 
     index, features = 0, []
     distance_ranges = [10, 20, 30, 40]
-    output_data = buildBatchGridOutputData(OUTPUT_DATA_SAMPLEGRID, batch_index, batch_grid_spacing)
+    output_data = buildBatchGridOutputData(buildOutputPath(OUTPUT_DATA_SAMPLEGRID, raster_resolution), batch_index, batch_grid_spacing)
 
     distances = []
     for index in range(len(sample_grid)): distances.append({})
 
     # With batching, we add distances one layer at a time after main processing has completed
     # Without batching, we create inmemory array of all distances, below
-    
+
     if batch_index is None:
 
         LogMessage("Building array of distances from distance rasters for all points and all rasters...")
 
         for table in tables_to_test:
             LogMessage("Getting distances for: " + table)
-            distance_raster = getDistanceRasterPath(table)
+            distance_raster = getDistanceRasterPath(raster_resolution, table)
             raster = rasterio.open(distance_raster)
             table_name_for_output = table.replace('__pro__27700', '')
 
             for index in range(len(sample_grid)):
                 metric_point = (sample_grid[index]['easting'], sample_grid[index]['northing'])
                 iterator = raster.sample([metric_point])
-                for iterator_item in iterator: distance = iterator_item[0] 
+                for iterator_item in iterator: distance = iterator_item[0]
                 distances[index]['distance__' + table_name_for_output] = float(distance)
 
             raster.close()
@@ -3679,11 +3826,17 @@ def createSamplingGridData(batch_values):
     # Populate Geocode lookup to save time
     populateLookupsWithSamplingGrid(batch_index, batch_grid_spacing)
 
+    with total.get_lock(): total_points = total.value
+
+    added_to_count = 0
     for index in range(len(sample_grid)):
         turbine = {}
 
         if index % 100 == 0:
-            LogMessage("Processing hypothetical turbine position: " + str(index + 1) + "/" + str(totalrecords))
+            with cnt.get_lock():
+                LogMessage("Processing hypothetical turbine position: " + str(cnt.value) + "/" + str(total_points))
+                cnt.value += (index - added_to_count)
+                added_to_count = index
 
         turbine['project_date_end'] = datetime.today().strftime('%Y-%m-%d')
         turbine['project_date_operational'] = None
@@ -3699,7 +3852,7 @@ def createSamplingGridData(batch_values):
         turbine_xy = {'x': sample_grid[index]['easting'], 'y': sample_grid[index]['northing']}
         turbine['turbine_country'] = getCountry(turbine_lnglat)
         if turbine['turbine_country'] is None: 
-            LogMessage("No country found for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
+            LogMissingData("No country found for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
             continue
 
         LogStage("Step 2")
@@ -3720,7 +3873,7 @@ def createSamplingGridData(batch_values):
 
         census = getCensus(turbine_lnglat)
         if census is None:
-            LogMessage("No census data for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
+            LogMissingData("No census data for position: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']))
             continue
 
         LogStage("Step 5")
@@ -3745,7 +3898,7 @@ def createSamplingGridData(batch_values):
         political = getPolitical(turbine_lnglat, year)
 
         if political is None:
-            LogMessage("No political data for point: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']) + " so skipping")
+            LogMissingData("No political data for point: " + str(turbine_lnglat['lng']) + "," + str(turbine_lnglat['lat']) + " so skipping")
             continue
 
         LogStage("Step 6")
@@ -3790,14 +3943,14 @@ def createSamplingGridData(batch_values):
                     reader = csv.DictReader(csvfile)
                     for row in reader: turbines.append(row)
 
-                if distance_column in turbines[0]: 
+                if distance_column in turbines[0]:
                     LogMessage("Turbine output data already has distances for: " + table_name_for_output)
                     continue
 
                 LogMessage("Getting distances from distance raster for: " + table)
 
-                distance_raster = getDistanceRasterPath(table)
-                batch_distance_raster = buildBatchRasterFilename(distance_raster, batch_index, batch_grid_spacing)
+                distance_raster = getDistanceRasterPath(raster_resolution, table)
+                batch_distance_raster = buildBatchRasterFilename(raster_resolution, distance_raster, batch_index, batch_grid_spacing)
                 raster = rasterio.open(batch_distance_raster)
 
                 # Output results to temporary file and only copy over once processing has completed
@@ -3808,7 +3961,7 @@ def createSamplingGridData(batch_values):
                 for turbine in turbines:
                     metric_point = (turbine['turbine_grid_coordinates_easting'], turbine['turbine_grid_coordinates_northing'])
                     iterator = raster.sample([metric_point])
-                    for iterator_item in iterator: distance = iterator_item[0] 
+                    for iterator_item in iterator: distance = iterator_item[0]
                     turbine[distance_column] = float(distance)
 
                     if not firstrowwritten:
@@ -3828,11 +3981,16 @@ def createSamplingGridData(batch_values):
 
     if (batch_index is not None) and (batch_grid_spacing is not None):
         batch_sampling_grid = buildBatchSamplingGridTableName(batch_index, batch_grid_spacing)
-        if postgisCheckTableExists(batch_sampling_grid): 
+        if postgisCheckTableExists(batch_sampling_grid):
             LogMessage("Dropping batch sampling grid table: " + batch_sampling_grid)
             postgisDropTable(batch_sampling_grid)
 
-        deleteDistanceRasters(tables_to_test, batch_index, batch_grid_spacing)
+        deleteDistanceRasters(raster_resolution, tables_to_test, batch_index, batch_grid_spacing)
+
+    with cnt.get_lock():
+        LogMessage("Processed hypothetical turbine position: " + str(cnt.value))
+        cnt.value += (index - added_to_count)
+        added_to_count = index
 
     LogMessage("========================================")
     LogMessage("== Ending batch: " + str(batch_index))
@@ -3843,10 +4001,13 @@ def createAllTurbinesData():
     Runs entire site predictor pipeline
     """
 
-    global CENSUS_SEARCH_RADIUS, OUTPUT_DATA_ALLTURBINES
+    global CENSUS_SEARCH_RADIUS, OUTPUT_DATA_ALLTURBINES, OUTPUT_FOLDER
 
     # Download all necessary OSM data
     osmDownloadData()
+
+    # Make outputfolder
+    makeFolder(OUTPUT_FOLDER)
 
     # download terrain GeoTIFF
     downloadTerrainGeoTIFF()
@@ -3866,10 +4027,10 @@ def createAllTurbinesData():
     # Populate dataframe with all failed and successful wind projects
     initialiseAllLargeWindProjectsDataFrame()
 
-    # Amalgamate location-specific tables that don't cover whole of UK into unified table that covers UK 
+    # Amalgamate location-specific tables that don't cover whole of UK into unified table that covers UK
     amalgamateNonUKtables()
 
-    # Get list of tables to run distance testing on    
+    # Get list of tables to run distance testing on
     tables_to_test_unprojected = removeNonEssentialTablesForDistance(postgisGetUKBasicProcessedTables())
 
     # Creates reprojected version of all testing tables to improve performance
@@ -3904,9 +4065,10 @@ def createAllTurbinesData():
 
     for turbine in all_turbines:
 
-        LogMessage("Processing turbine: " + str(index + 1) + "/" + str(totalrecords))
+        if index % 1000 == 0:
+            LogMessage("Processing turbine: " + str(index + 1) + "/" + str(totalrecords))
 
-        # Convert dates to text 
+        # Convert dates to text
         # Note: import creates date type fields unprompted
         if turbine['project_date_operational'] is not None:
             turbine['project_date_operational'] = turbine['project_date_operational'].strftime('%Y-%m-%d')
@@ -3939,9 +4101,9 @@ def createAllTurbinesData():
         turbine['project_size'] = getProjectSize(turbine['project_guid'])
 
         # Get viewshed visibility overlaps for (subset of) layers
-        # *** Currently selects subset of layers using filterRelevantViewshedLayers() 
+        # *** Currently selects subset of layers using filterRelevantViewshedLayers()
         # *** to save computation time but this is not ideal
-        # *** Ideally optimise computation and run on all layers 
+        # *** Ideally optimise computation and run on all layers
         # *** in order to avoid prejudging which might be salient
 
         # viewshedoverlaps = getViewshedOverlaps(turbine_lnglat, turbine['turbine_tipheight'], tables_to_test)
@@ -3951,7 +4113,7 @@ def createAllTurbinesData():
         for census_key in census.keys(): turbine[census_key] = census[census_key]
 
         # # Get demographics for a number of radius circles
-        # for census_radius in [10, 20, 30, 40]:        
+        # for census_radius in [10, 20, 30, 40]:
         #     census = getCensus(turbine_lnglat, census_radius * 1000)
         #     for census_key in census.keys(): turbine[str(census_radius) + 'km_radius_' + census_key] = census[census_key]
 
@@ -4014,12 +4176,12 @@ def createAllTurbinesData():
 
         index += 1
 
-def initializeDistanceRasters(batch_grid_spacing):
+def initializeDistanceRasters(raster_resolution, batch_grid_spacing):
     """
     Initializes distance rasters, regardless of whether batching or not
     """
 
-    # Get list of tables to run distance testing on    
+    # Get list of tables to run distance testing on
     tables_to_test_unprojected = removeNonEssentialTablesForDistance(postgisGetUKBasicProcessedTables())
 
     # Creates reprojected version of all testing tables to improve performance
@@ -4029,9 +4191,9 @@ def initializeDistanceRasters(batch_grid_spacing):
 
     tables_to_test = removeNonEssentialTablesForDistance(tables_to_test)
 
-    createDistanceRasters(tables_to_test, None, batch_grid_spacing)
+    createDistanceRasters(raster_resolution, tables_to_test, None, batch_grid_spacing)
 
-def runSitePredictor(batch_grid_spacing):
+def runSitePredictor(batch_grid_spacing, raster_resolution):
     """
     Runs entire site predictor application
     """
@@ -4044,7 +4206,7 @@ def runSitePredictor(batch_grid_spacing):
     # Michael Harper, Ben Anderson, Patrick A.B. James, AbuBakr S. Bahaj (2019)
     # https://www.sciencedirect.com/science/article/pii/S0301421519300023
 
-    global OUTPUT_DATA_SAMPLEGRID
+    global OUTPUT_DATA_SAMPLEGRID, CLIPPING_FOLDER, DEFAULT_BATCH_GRID_SPACING
 
     createAllTurbinesData()
 
@@ -4052,32 +4214,39 @@ def runSitePredictor(batch_grid_spacing):
     if not machinelearningModelExists(): machinelearningBuildModel()
 
     # Create batch grid for multiprocessing
-    if batch_grid_spacing is None: batch_grid_spacing = 400000
+    if batch_grid_spacing is None: batch_grid_spacing = DEFAULT_BATCH_GRID_SPACING
 
     number_batches = createBatchGrid(batch_grid_spacing)
-    LogMessage("Batch grid spacing set to " + str(batch_grid_spacing) + " metres, running multiprocessing with " + str(number_batches) + " batches")
+    LogMessage("Batch grid spacing set to " + str(batch_grid_spacing) + " metres, will run multiprocessing with " + str(number_batches) + " batches")
+
+    LogMessage("Determining total number of points to be processed...")
+
+    total_points = getSamplingGridNumberPoints(batch_grid_spacing, number_batches, raster_resolution)
+
+    LogMessage("Total number of points to be processed: " + str(total_points))
 
     # Initialize core distance rasters that will be used by all batches
-    initializeDistanceRasters(batch_grid_spacing)
+    initializeDistanceRasters(raster_resolution, batch_grid_spacing)
 
-    multiprocessing_batch_values = [[batch_index, batch_grid_spacing] for batch_index in range(1, number_batches + 1)]
+    multiprocessing_batch_values = [[batch_index, batch_grid_spacing, raster_resolution] for batch_index in range(1, number_batches + 1)]
 
     # Run without multiprocessing, ie. in sequence
     # for item in multiprocessing_batch_values:
     #     createSamplingGridData(item)
 
-    output_data = OUTPUT_DATA_SAMPLEGRID
+    output_data = buildOutputPath(OUTPUT_DATA_SAMPLEGRID, raster_resolution)
 
-    if not isfile(output_data): 
+    if not isfile(output_data):
 
         LogMessage("************************************************")
         LogMessage("********** STARTING MULTIPROCESSING ************")
         LogMessage("************************************************")
 
+        cnt, total = Value('i', 0), Value('i', total_points)
         # Run multiprocessing pool
-        with Pool(None) as p:
-            # Populates sampling grid (spaced at RASTER_RESOLUTION metres) with same
-            # features data - where possible - as all turbines, above. 
+        with Pool(initializer=init_counter_total_globals, initargs=(cnt, total, )) as p:
+            # Populates sampling grid (spaced at raster_resolution metres) with same
+            # features data - where possible - as all turbines, above.
             # Year used is (CURRENTYEAR - 1), ie. attempting to predict probability-of-success for now
             p.map(createSamplingGridData, multiprocessing_batch_values)
 
@@ -4091,7 +4260,7 @@ def runSitePredictor(batch_grid_spacing):
 
         for batch_item in multiprocessing_batch_values:
             batch_index, batch_grid_spacing = batch_item[0], batch_item[1]
-            batch_output_data = buildBatchGridOutputData(OUTPUT_DATA_SAMPLEGRID, batch_index, batch_grid_spacing)
+            batch_output_data = buildBatchGridOutputData(buildOutputPath(OUTPUT_DATA_SAMPLEGRID, raster_resolution), batch_index, batch_grid_spacing)
             if not isfile(batch_output_data): continue
 
             LogMessage("Adding batch output file: " + str(batch_index))
@@ -4103,7 +4272,7 @@ def runSitePredictor(batch_grid_spacing):
                     turbines.append(row)
 
             if len(turbines) == 0: continue
-            
+
             if not firstrowwritten:
                 with open(output_data, 'w', newline='') as csvfile:
                     fieldnames = turbines[0].keys()
@@ -4121,6 +4290,8 @@ def runSitePredictor(batch_grid_spacing):
     # Run machine learning model on sampling grid
     machinelearningRunModelOnSamplingGrid()
 
+    if isdir(CLIPPING_FOLDER): shutil.rmtree(CLIPPING_FOLDER)
+
 # ***********************************************************
 # ***********************************************************
 # ********************* MAIN APPLICATION ********************
@@ -4132,13 +4303,53 @@ def main():
     Main function - put here to allow multiprocessing to work
     """
 
+    global RASTER_RESOLUTION, SAMPLING_GRID
+
+    final_raster_resolution = RASTER_RESOLUTION
     batch_grid_spacing = None
 
     if len(sys.argv) > 1:
-        batch_grid_spacing = sys.argv[1]
-        LogMessage("Running batch processing with batch_grid_spacing = " + str(batch_grid_spacing))
+        batch_grid_spacing_set, resample = False, False
 
-    runSitePredictor(batch_grid_spacing)
+        arg_index = 1
+        while True:
+            if arg_index >= len(sys.argv): break
+            arg = sys.argv[arg_index].strip()
+
+            if isfloat(arg) and (not batch_grid_spacing_set):
+                batch_grid_spacing = int(arg)
+                batch_grid_spacing_set = True
+                LogMessage("Running batch processing with batch_grid_spacing = " + str(batch_grid_spacing))
+
+            if arg == '--resample':
+                resample = True
+                LogMessage("--resample argument passed: Deleting output files")
+
+            if arg == '--resolution':
+                if len(sys.argv) > arg_index:
+                    resolution = sys.argv[arg_index + 1]
+                    if isfloat(resolution):
+                        final_raster_resolution = int(resolution)
+                        arg_index += 1
+                        LogMessage("--resolution argument passed: Using resolution of " + resolution + " metres")
+
+            arg_index += 1
+
+        if resample:
+            files_to_delete =   [ \
+                                    buildOutputPath(OUTPUT_DATA_SAMPLEGRID, final_raster_resolution), \
+                                    buildOutputPath(OUTPUT_ML_GEOJSON, final_raster_resolution), \
+                                    buildOutputPath(OUTPUT_ML_RASTER, final_raster_resolution), \
+                                    buildOutputPath(OUTPUT_ML_CSV, final_raster_resolution) \
+                                ]
+            for file_to_delete in files_to_delete:
+                if isfile(file_to_delete): os.remove(file_to_delete)
+
+    SAMPLING_GRID += str(final_raster_resolution) + "_m__uk"
+
+    runSitePredictor(batch_grid_spacing, final_raster_resolution)
+
+initLogging()
 
 if __name__ == "__main__":
     main()

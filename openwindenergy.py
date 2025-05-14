@@ -1,5 +1,5 @@
 # ***********************************************************
-# ********************* OPEN WIND ENERGY ******************** 
+# ********************* OPEN WIND ENERGY ********************
 # ***********************************************************
 # ********** Script to convert data.openwind.energy *********
 # ********** data catalogue to composite GIS layers *********
@@ -82,6 +82,7 @@ if os.environ.get("QGIS_PYTHON_PATH") is not None: QGIS_PYTHON_PATH = os.environ
 if os.environ.get("CKAN_URL") is not None: CKAN_URL = os.environ.get('CKAN_URL')
 if os.environ.get("TILESERVER_URL") is not None: TILESERVER_URL = os.environ.get('TILESERVER_URL')
 
+OPENWINDENERGY_VERSION              = "1.0"
 DEFAULT_HEIGHT_TO_TIP               = 124.2     # Based on openwind's own manual data on all large (>=75 m to tip-height) failed and successful UK onshore wind projects
 DEFAULT_BLADE_RADIUS                = 47.8      # Based on openwind's own manual data on all large (>=75 m to tip-height) failed and successful UK onshore wind projects
 HEIGHT_TO_TIP                       = DEFAULT_HEIGHT_TO_TIP
@@ -136,8 +137,10 @@ DEBUG_RUN                           = False
 OPENMAPTILES_HOSTED_FONTS           = "https://cdn.jsdelivr.net/gh/open-wind/openmaptiles-fonts/fonts/{fontstack}/{range}.pbf"
 SKIP_FONTS_INSTALLATION             = False
 CKAN_USER_AGENT                     = 'ckanapi/1.0 (+https://openwind.energy)'
+DOWNLOAD_USER_AGENT                 = 'openwindenergy/' + OPENWINDENERGY_VERSION
 LOG_SINGLE_PASS                     = WORKING_FOLDER + 'log.txt'
 PROCESSING_STATE_FILE               = 'PROCESSING'
+PROCESSING_COMPLETE_FILE            = 'PROCESSINGCOMPLETE'
 
 # Lookup to convert internal areas to OSM names
 
@@ -1673,7 +1676,7 @@ def processCustomConfiguration(customconfig):
 
     # Open Wind Energy CKAN requires special user-agent for downloads as protection against data crawlers
     opener = urllib.request.build_opener()
-    opener.addheaders = [('User-agent', CKAN_USER_AGENT)]
+    opener.addheaders = [('User-Agent', CKAN_USER_AGENT)]
     urllib.request.install_opener(opener)
 
     if not config_basename.endswith('.yml'):
@@ -1849,6 +1852,7 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
     TODO: Add support for non-ArcGIS/GeoJSON/WFS/osm-export-tool-YML
     """
 
+    global DOWNLOAD_USER_AGENT
     global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_FILE_PREFIX, OSM_NAME_CONVERT, OVERALL_CLIPPING_FILE
     global REGENERATE_OUTPUT, BUILD_FOLDER, OSM_DOWNLOADS_FOLDER, OSM_MAIN_DOWNLOAD, OSM_CONFIG_FOLDER, WORKING_CRS, OSM_EXPORT_DATA
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
@@ -1892,7 +1896,7 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
             LogMessage("Downloading osm-export-tool YML: " + url_basename + " -> " + downloaded_yml)
 
             opener = urllib.request.build_opener()
-            opener.addheaders = [('User-agent', 'Mozilla/5.0')]
+            opener.addheaders = [('User-Agent', 'Mozilla/5.0')]
             urllib.request.install_opener(opener)
             attemptDownloadUntilSuccess(dataset['url'], downloaded_yml_fullpath)
 
@@ -2002,15 +2006,20 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
 
                 temp_output_file = 'temp.gpkg'
                 getfeature_url = dataset['url']
+                # We need DOWNLOAD_USER_AGENT 'User-Agent' header to allow access to scot.gov's WFS AWS servers
+                # Following direct communication with data providers (12/05/2025), 
+                # they added DOWNLOAD_USER_AGENT ('openwindenergy/*') as exception to their blacklist
+                LogMessage("Setting 'User-Agent' to " + DOWNLOAD_USER_AGENT + " to enable WFS download from specific data providers")
+                headers = {'User-Agent': DOWNLOAD_USER_AGENT}
 
                 # Attempt to connect to WFS using highest version
 
                 wfs_version = '2.0.0'
                 try:
-                    wfs = WebFeatureService(url=dataset['url'], version='2.0.0')
+                    wfs = WebFeatureService(url=dataset['url'], version='2.0.0', headers=headers)
                 except:
                     try:
-                        wfs = WebFeatureService(url=dataset['url'])
+                        wfs = WebFeatureService(url=dataset['url'], headers=headers)
                         wfs_version = wfs.version
                     except:
                         LogError("Problem accessing WFS: " + getfeature_url)
@@ -2044,7 +2053,7 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
                     'TYPENAME': layer
                 }
                 url = getfeature_url.split('?')[0] + '?' + urllib.parse.urlencode(params)
-                response = requests.get(url)
+                response = requests.get(url, headers=headers)
                 result = xmltodict.parse(response.text)
 
                 # Return False if incorrect response so we can retry again
@@ -2079,7 +2088,7 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
                     recordstodownload = totalrecords - recordsdownloaded
                     if recordstodownload > batchsize: recordstodownload = batchsize
 
-                    wfs_request_url = Request('GET', getfeature_url, params={
+                    wfs_request_url = Request('GET', getfeature_url, headers=headers, params={
                         'service': 'WFS',
                         'version': wfs_version,
                         'request': 'GetFeature',
@@ -3502,6 +3511,10 @@ logging.basicConfig(
     ]
 )
 
+if isfile(PROCESSING_COMPLETE_FILE):
+    LogMessage("Previous build run complete, aborting this run")
+    exit(0)
+
 time.sleep(3)
 
 print("""\033[1;34m
@@ -3628,4 +3641,7 @@ if PERFORM_DOWNLOAD:
 
 runProcessingOnDownloads(DATASETS_DOWNLOADS_FOLDER)
 
+# Set up status flag files
+
+with open(PROCESSING_COMPLETE_FILE, 'w') as file: file.write("PROCESSINGCOMPLETE")
 if isfile(PROCESSING_STATE_FILE): os.remove(PROCESSING_STATE_FILE)

@@ -1,0 +1,11 @@
+pyproj
+requests
+xmltodict
+pyyaml
+osmium~=3.5.0
+psycopg2-binary
+python-dotenv
+rasterio
+h2o
+geopandas
+plotly

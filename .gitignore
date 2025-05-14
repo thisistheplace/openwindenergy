@@ -38,6 +38,7 @@ uk-clipping.gpkg-wal
 terraform/azure/
 sitepredictor/*.csv
 sitepredictor/*.log
+sitepredictor/machinelearning_legacy/
 sitepredictor/census_2011.zip
 sitepredictor/output/
 sitepredictor/sentimentanalysis/

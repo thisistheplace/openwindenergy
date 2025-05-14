@@ -69,6 +69,7 @@ PROCESSING_COMMAND_LINE_EXTERNAL    = './build-cli.sh'
 PROCESSING_COMMAND_LINE_SERVER      = '../build-server.sh'
 PROCESSING_STATE_FILE               = '../PROCESSING'
 PROCESSING_START                    = '../PROCESSINGSTART'
+PROCESSING_COMPLETE                 = '../PROCESSINGCOMPLETE'
 CERTBOT_LOG                         = '../log-certbot.txt'
 
 app = Flask(__name__)
@@ -161,7 +162,9 @@ def setProcessing(processing_state, command_line=''):
     Sets processing state
     """
 
-    global PROCESSING_STATE_FILE, PROCESSING_COMMAND_LINE_SERVER
+    global PROCESSING_STATE_FILE, PROCESSING_COMPLETE, PROCESSING_COMMAND_LINE_SERVER
+
+    if isfile(PROCESSING_COMPLETE): os.remove(PROCESSING_COMPLETE)
 
     if processing_state:
         with open(PROCESSING_STATE_FILE, 'w', encoding='utf-8') as file: file.write(command_line)
@@ -183,7 +186,7 @@ fi
         with open(PROCESSING_COMMAND_LINE_SERVER, 'w', encoding='utf-8') as file: 
             file.write("""#!/bin/bash
 
-./build-cli.sh "$@"
+./build-cli.sh
 
 # ****************************************************************
 # ***** Perform post-build setup specific to server install ******
