@@ -13,6 +13,7 @@ tippecanoe/
 venv/
 __pycache__
 log.txt
+*.log
 *.geojson
 *.pbf
 *.gpkg

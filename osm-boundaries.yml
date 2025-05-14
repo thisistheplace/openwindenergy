@@ -7,4 +7,4 @@ osm-boundaries:
       - boundary
       - admin_level
     where:
-      - (boundary = 'administrative') AND (admin_level IN ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10'))
+      - (name IS NOT NULL) AND (boundary = 'administrative') AND (admin_level IN ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10'))

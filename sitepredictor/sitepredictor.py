@@ -586,18 +586,23 @@ def getGPKGProjection(file_path):
     """
 
     if isfile(file_path):
-        with sqlite3.connect(file_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("select a.srs_id from gpkg_contents as a;")
-            result = cursor.fetchall()
-            if len(result) == 0:
-                LogMessage(file_path + " has no layers - deleting and quitting")
-                os.remove(file_path)
-                exit()
-            else:
-                firstrow = result[0]
-                return 'EPSG:' + str(dict(firstrow)['srs_id'])
+        try:
+            with sqlite3.connect(file_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("select a.srs_id from gpkg_contents as a;")
+                result = cursor.fetchall()
+                if len(result) == 0:
+                    LogMessage(file_path + " has no layers - deleting and quitting")
+                    os.remove(file_path)
+                    return None
+                else:
+                    firstrow = result[0]
+                    return 'EPSG:' + str(dict(firstrow)['srs_id'])
+        except:
+            LogMessage("Problem retrieving projection, possible corrupted download: " + basename(file_path))
+            os.remove(file_path)
+            return None
 
 def convertGPKG2GeoJSON(input_file):
     """
@@ -3544,7 +3549,13 @@ def runAdditionalDownloads():
             if  ((file_extension != 'zip') and (not isfile(additional_download_path))) or \
                 ((file_extension == 'zip') and (not isdir(additional_download_directory))):
                 LogMessage("Downloading: " + dataset)
-                attemptDownloadUntilSuccess(additional_download['url'], additional_download_path)
+                while True:
+                    attemptDownloadUntilSuccess(additional_download['url'], additional_download_path)
+                    if file_extension != 'gpkg': break
+                    # Attempt to get projection from any GPKG - if error, allow retry of download
+                    if getGPKGProjection(additional_download_path) is not None: break
+                    LogMessage("Retrying download after delay")
+                    time.sleep(5)
 
         if (file_extension == 'zip') and (not isdir(additional_download_directory)):
             LogMessage("Unzipping: " + dataset)
@@ -4288,7 +4299,7 @@ def runSitePredictor(batch_grid_spacing, raster_resolution):
             os.remove(batch_output_data)
 
     # Run machine learning model on sampling grid
-    machinelearningRunModelOnSamplingGrid()
+    machinelearningRunModelOnSamplingGrid(raster_resolution)
 
     if isdir(CLIPPING_FOLDER): shutil.rmtree(CLIPPING_FOLDER)
 

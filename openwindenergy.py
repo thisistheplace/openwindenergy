@@ -47,6 +47,8 @@ import time
 import geopandas as gpd
 import pandas as pd
 import shapefile
+import multiprocessing
+from multiprocessing import Pool, Value
 from datetime import datetime
 from requests import Request
 from pathlib import Path
@@ -83,6 +85,9 @@ if os.environ.get("CKAN_URL") is not None: CKAN_URL = os.environ.get('CKAN_URL')
 if os.environ.get("TILESERVER_URL") is not None: TILESERVER_URL = os.environ.get('TILESERVER_URL')
 
 OPENWINDENERGY_VERSION              = "1.0"
+TEMP_FOLDER                         = "temp/"
+USE_MULTIPROCESSING                 = False
+if SERVER_BUILD: USE_MULTIPROCESSING = True
 DEFAULT_HEIGHT_TO_TIP               = 124.2     # Based on openwind's own manual data on all large (>=75 m to tip-height) failed and successful UK onshore wind projects
 DEFAULT_BLADE_RADIUS                = 47.8      # Based on openwind's own manual data on all large (>=75 m to tip-height) failed and successful UK onshore wind projects
 HEIGHT_TO_TIP                       = DEFAULT_HEIGHT_TO_TIP
@@ -173,6 +178,46 @@ os.environ['CPL_LOG'] = WORKING_FOLDER + 'log-ogr2ogr.txt'
 # ***************** General helper functions ****************
 # ***********************************************************
 
+def initLogging():
+    """
+    Initialises logging
+    """
+
+    class PaddedProcessFormatter(logging.Formatter):
+        def format(self, record):
+            # Pad process ID to 4 digits with leading zeros
+            record.process_padded = f"PID:{record.process:08d}"
+            return super().format(record)
+
+    log_format = '%(asctime)s,%(msecs)03d [%(process_padded)s] [%(levelname)-2s] %(message)s'
+    formatter = PaddedProcessFormatter(log_format, "%Y-%m-%d %H:%M:%S")
+    handler_1 = logging.StreamHandler()
+    handler_2 = logging.FileHandler(LOG_SINGLE_PASS)
+    handler_3 = logging.FileHandler("{0}/{1}.log".format(WORKING_FOLDER, datetime.today().strftime('%Y-%m-%d')))
+
+    handler_1.setFormatter(formatter)
+    handler_2.setFormatter(formatter)
+    handler_3.setFormatter(formatter)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(process_padded)s] [%(levelname)-2s] %(message)s',
+        handlers=[handler_1, handler_2, handler_3]
+    )
+
+def getNumberProcesses():
+    """
+    Gets number of processes to use in multiprocessing
+    If no multiprocessing, then return 1, ie. single process
+    """
+
+    global USE_MULTIPROCESSING
+
+    number_processes = 1
+    if USE_MULTIPROCESSING: number_processes = None
+
+    return number_processes
+
 def rebuildCommandLine(argv):
     """
     Regenerate full command line from list of arguments
@@ -255,6 +300,7 @@ def LogMessage(logtext):
     Logs message to console with timestamp
     """
 
+    logger = multiprocessing.get_logger()
     logging.info(logtext)
 
 def LogWarning(logtext):
@@ -262,6 +308,7 @@ def LogWarning(logtext):
     Logs warning message to console with timestamp
     """
 
+    logger = multiprocessing.get_logger()
     logging.warning(logtext)
 
 def LogError(logtext):
@@ -269,6 +316,7 @@ def LogError(logtext):
     Logs error message to console with timestamp
     """
 
+    logger = multiprocessing.get_logger()
     logging.error("*** ERROR *** " + logtext)
 
 def LogFatalError(logtext):
@@ -391,6 +439,53 @@ def osmDownloadData():
     else:
         LogMessage("Downloading global water and coastline data for OSM tilemaker")
         runSubprocess([TILEMAKER_DOWNLOAD_SCRIPT])
+
+# ***********************************************************
+# **************** Multiprocessing functions ****************
+# ***********************************************************
+
+def init_globals_boolean(global_bool):
+    """
+    Used as flag across multiprocessing threads
+    """
+
+    global global_boolean
+    global_boolean = global_bool
+
+def init_globals_boolean_count(global_bool, global_cnt):
+    """
+    Used as flag across multiprocessing threads
+    """
+
+    global global_boolean, global_count
+    global_boolean = global_bool
+    global_count = global_cnt
+
+def singleprocessFileCopy(copy_parameters):
+    """
+    Single process file copy using copy_parameters
+    """
+
+    copy_description, file_src, file_dst = copy_parameters[0], copy_parameters[1], copy_parameters[2]
+
+    LogMessage(copy_description)
+
+    shutil.copy(file_src, file_dst)
+
+def multiprocessFileCopy(queue_files):
+    """
+    Copies files using multiprocessing to save time
+    """
+
+    LogMessage("************************************************")
+    LogMessage("********** STARTING MULTIPROCESSING ************")
+    LogMessage("************************************************")
+
+    with Pool(processes=getNumberProcesses()) as p: p.map(singleprocessFileCopy, queue_files)
+
+    LogMessage("************************************************")
+    LogMessage("*********** ENDING MULTIPROCESSING *************")
+    LogMessage("************************************************")
 
 # ***********************************************************
 # ******************** PostGIS functions ********************
@@ -798,9 +893,9 @@ def runSubprocess(subprocess_array):
     Runs subprocess
     """
 
-    global SERVER_BUILD
+    global SERVER_BUILD, USE_MULTIPROCESSING
 
-    if not SERVER_BUILD:
+    if (not SERVER_BUILD) and (not USE_MULTIPROCESSING):
         if subprocess_array[0] == 'ogr2ogr': subprocess_array.append('-progress')
 
     output = subprocess.run(subprocess_array)
@@ -1806,6 +1901,21 @@ def guessWFSLayerIndex(layers):
 
     return 0
 
+def checkGeoJSONFile(file_path):
+    """
+    Checks validity of single GeoJSON file
+    """
+
+    file = basename(file_path)
+
+    try:
+        json_data = json.load(open(file_path))
+        LogMessage("GeoJSON file valid: " + file)
+    except:
+        LogWarning("GeoJSON file invalid, deleting: " + file)
+        os.remove(file_path)
+        with global_boolean.get_lock(): global_boolean.value = 0
+
 def checkGeoJSONFiles(output_folder):
     """
     Checks validity of GeoJSON files within folder
@@ -1816,22 +1926,32 @@ def checkGeoJSONFiles(output_folder):
 
     files = getFilesInFolder(output_folder)
 
+    files_to_check = []
     for file in files:
-
         if not file.endswith('.geojson'): continue
-
         file_path = output_folder + file
+        files_to_check.append(file_path)
 
-        try:
-            json_data = json.load(open(file_path))
-        except:
-            LogWarning("GeoJSON file is invalid, deleting: " + file)
-            os.remove(file_path)
-            return False
+    number_processes = getNumberProcesses()
+    global_boolean = Value('i', 1)
 
-    LogMessage("All downloaded GeoJSON files valid")
+    LogMessage("************************************************")
+    LogMessage("********** STARTING MULTIPROCESSING ************")
+    LogMessage("************************************************")
 
-    return True
+    # Run multiprocessing pool
+    with Pool(processes=number_processes, initializer=init_globals_boolean, initargs=(global_boolean,)) as p:
+        p.map(checkGeoJSONFile, files_to_check)
+
+    LogMessage("************************************************")
+    LogMessage("*********** ENDING MULTIPROCESSING *************")
+    LogMessage("************************************************")
+
+    all_valid = (bool)(global_boolean.value)
+
+    if all_valid: LogMessage("All downloaded GeoJSON files valid")
+
+    return all_valid
 
 def downloadDatasets(ckanurl, output_folder):
     """
@@ -1945,315 +2065,373 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
     osm_layers.sort()
     generateOSMLookup(osm_layers)
 
-    # Remove any temp files that may have been left if previous run interrupted
-    if isfile('temp.geojson'): os.remove('temp.geojson')
-    if isfile('temp.gml'): os.remove('temp.gml')
-    if isfile('temp.gpkg'): os.remove('temp.gpkg')
-
+    all_datasets_downloaded = Value('i', 1)
+    num_datasets_downloaded = Value('i', 0)
+    dataset_index, datasets_queue = 0, []
     for ckanpackage in ckanpackages.keys():
         for dataset in ckanpackages[ckanpackage]['datasets']:
-            dataset_title = reformatDatasetName(dataset['title'])
-            feature_name = dataset['title']
-            feature_layer_url = dataset['url']
-            temp_output_file = 'temp.geojson'
-            output_file = join(output_folder, f'{dataset_title}.geojson')
-            output_gpkg_file = join(output_folder, f'{dataset_title}.gpkg')
-            zip_folder = output_folder + dataset_title + '/'
+            dataset_index += 1
+            datasets_queue.append([dataset_index, dataset, output_folder])
 
-            # If export file(s) already exists, then skip to next record
-            if isfile(output_file) or isfile(output_gpkg_file): continue
+    number_processes = getNumberProcesses()
 
-            if dataset['type'] == 'KML':
 
-                LogMessage("Downloading KML:     " + feature_name)
+    LogMessage("************************************************")
+    LogMessage("********** STARTING MULTIPROCESSING ************")
+    LogMessage("************************************************")
 
-                url_basename = basename(dataset['url'])
-                kml_file = output_folder + dataset_title + '.kml'
-                kmz_file = output_folder + dataset_title + '.kmz'
+    LogMessage("Downloading missing datasets...")
 
-                if url_basename[-4:] == '.kml':
-                    attemptDownloadUntilSuccess(dataset['url'], kml_file)
-                # If kmz then unzip to folder
-                elif url_basename[-4:] == '.kmz':
-                    attemptDownloadUntilSuccess(dataset['url'], kmz_file)
-                    with ZipFile(kmz_file, 'r') as zip_ref: zip_ref.extractall(zip_folder)
-                    os.remove(kmz_file)
-                # If zip then download and unzip
-                elif url_basename[-4:] == '.zip':
-                    zip_file = output_folder + dataset_title + '.zip'
-                    attemptDownloadUntilSuccess(dataset['url'], zip_file)
-                    with ZipFile(zip_file, 'r') as zip_ref: zip_ref.extractall(zip_folder)
-                    os.remove(zip_file)
-                    unzipped_files = getFilesInFolder(zip_folder)
-                    for unzipped_file in unzipped_files:
-                        if (unzipped_file[-4:] == '.kmz'):
-                            with ZipFile(zip_folder + unzipped_file, 'r') as zip_ref: zip_ref.extractall(zip_folder)
+    # Run multiprocessing pool
+    with Pool(processes=number_processes, initializer=init_globals_boolean_count, initargs=(all_datasets_downloaded, num_datasets_downloaded, )) as p:
+        p.map(downloadDataset, datasets_queue)
+    
+    num_downloaded = num_datasets_downloaded.value
+    if num_downloaded == 0: LogMessage("All datasets already downloaded")
+    else: LogMessage(str(num_downloaded) + " dataset(s) downloaded in this pass")
 
-                if isdir(zip_folder):
-                    unzipped_files = getFilesInFolder(zip_folder)
-                    for unzipped_file in unzipped_files:
-                        if (unzipped_file[-4:] == '.kml'):
-                            shutil.copy(zip_folder + unzipped_file, kml_file)
-                    shutil.rmtree(zip_folder)
+    LogMessage("************************************************")
+    LogMessage("*********** ENDING MULTIPROCESSING *************")
+    LogMessage("************************************************")
 
-                if isfile(kml_file):
-                    # Forced to use togeojson as KML support in ogr2ogr is unpredictable on MacOS
-                    with open(temp_output_file, "w") as geojson_file:
-                         subprocess.call(["togeojson", kml_file], stdout = geojson_file)
-                    os.remove(kml_file)
+    return (bool)(all_datasets_downloaded.value)
 
-            elif dataset['type'] == 'WFS':
+def downloadDataset(dataset_parameters):
+    """
+    Downloads single dataset
+    """
 
-                temp_output_file = 'temp.gpkg'
-                getfeature_url = dataset['url']
-                # We need DOWNLOAD_USER_AGENT 'User-Agent' header to allow access to scot.gov's WFS AWS servers
-                # Following direct communication with data providers (12/05/2025), 
-                # they added DOWNLOAD_USER_AGENT ('openwindenergy/*') as exception to their blacklist
-                LogMessage("Setting 'User-Agent' to " + DOWNLOAD_USER_AGENT + " to enable WFS download from specific data providers")
-                headers = {'User-Agent': DOWNLOAD_USER_AGENT}
+    global CKAN_USER_AGENT, TEMP_FOLDER
 
-                # Attempt to connect to WFS using highest version
+    dataset_index, dataset, output_folder = dataset_parameters[0], dataset_parameters[1], dataset_parameters[2]
 
-                wfs_version = '2.0.0'
-                try:
-                    wfs = WebFeatureService(url=dataset['url'], version='2.0.0', headers=headers)
-                except:
-                    try:
-                        wfs = WebFeatureService(url=dataset['url'], headers=headers)
-                        wfs_version = wfs.version
-                    except:
-                        LogError("Problem accessing WFS: " + getfeature_url)
-                        return False
+    dataset_title = reformatDatasetName(dataset['title'])
+    feature_name = dataset['title']
+    feature_layer_url = dataset['url']
+    makeFolder(TEMP_FOLDER)
+    temp_base = join(TEMP_FOLDER, 'temp_' + str(dataset_index))
 
-                # Get correct url for 'GetFeature' as this may different from
-                # initial url providing capabilities information
+    opener = urllib.request.build_opener()
+    opener.addheaders = [('User-Agent', CKAN_USER_AGENT)]
+    urllib.request.install_opener(opener)
 
-                methods = wfs.getOperationByName('GetFeature').methods
-                for method in methods:
-                    if method['type'].lower() == 'get': getfeature_url = method['url']
+    # Remove any temp files that may have been left if previous run interrupted
+    for possible_extension in ['.geojson', '.gml', '.gpkg']:
+        if isfile(temp_base + possible_extension): os.remove(temp_base + possible_extension)
 
-                # We default to first available layer in WFS
-                # If different layer is needed, set 'layer' custom field in CKAN
+    temp_output_file = temp_base + '.geojson'
+    output_file = join(output_folder, f'{dataset_title}.geojson')
+    output_gpkg_file = join(output_folder, f'{dataset_title}.gpkg')
+    zip_folder = output_folder + dataset_title + '/'
 
-                layers = list(wfs.contents)
-                layer = layers[0]
-                if ('layer' in dataset) and (dataset['layer'] is not None): layer = dataset['layer']
+    # If export file(s) already exists, quit
+    if isfile(output_file) or isfile(output_gpkg_file): return
 
-                # Extract CRS from WFS layer info
+    if dataset['type'] == 'KML':
 
-                crs = str(wfs[layer].crsOptions[0]).replace('urn:ogc:def:crs:', '').replace('::', ':').replace('OGC:1.3:CRS84', 'EPSG:4326')
+        LogMessage("Downloading KML:     " + feature_name)
 
-                # Perform initial 'hits' query to get total records and pagination batch size
+        url_basename = basename(dataset['url'])
+        kml_file = output_folder + dataset_title + '.kml'
+        kmz_file = output_folder + dataset_title + '.kmz'
 
-                params={
-                    'SERVICE': 'WFS',
-                    'VERSION': wfs_version,
-                    'REQUEST': 'GetFeature',
-                    'RESULTTYPE': 'hits',
-                    'TYPENAME': layer
-                }
-                url = getfeature_url.split('?')[0] + '?' + urllib.parse.urlencode(params)
-                response = requests.get(url, headers=headers)
-                result = xmltodict.parse(response.text)
+        if url_basename[-4:] == '.kml':
+            attemptDownloadUntilSuccess(dataset['url'], kml_file)
+        # If kmz then unzip to folder
+        elif url_basename[-4:] == '.kmz':
+            attemptDownloadUntilSuccess(dataset['url'], kmz_file)
+            with ZipFile(kmz_file, 'r') as zip_ref: zip_ref.extractall(zip_folder)
+            os.remove(kmz_file)
+        # If zip then download and unzip
+        elif url_basename[-4:] == '.zip':
+            zip_file = output_folder + dataset_title + '.zip'
+            attemptDownloadUntilSuccess(dataset['url'], zip_file)
+            with ZipFile(zip_file, 'r') as zip_ref: zip_ref.extractall(zip_folder)
+            os.remove(zip_file)
+            unzipped_files = getFilesInFolder(zip_folder)
+            for unzipped_file in unzipped_files:
+                if (unzipped_file[-4:] == '.kmz'):
+                    with ZipFile(zip_folder + unzipped_file, 'r') as zip_ref: zip_ref.extractall(zip_folder)
 
-                # Return False if incorrect response so we can retry again
+        if isdir(zip_folder):
+            unzipped_files = getFilesInFolder(zip_folder)
+            for unzipped_file in unzipped_files:
+                if (unzipped_file[-4:] == '.kml'):
+                    shutil.copy(zip_folder + unzipped_file, kml_file)
+            shutil.rmtree(zip_folder)
 
-                if not ('wfs:FeatureCollection' in result):
-                    LogError("Missing wfs:FeatureCollection in response from: " + getfeature_url)
-                    return False
+        if isfile(kml_file):
+            # Forced to use togeojson as KML support in ogr2ogr is unpredictable on MacOS
+            with open(temp_output_file, "w") as geojson_file:
+                    subprocess.call(["togeojson", kml_file], stdout = geojson_file)
+            os.remove(kml_file)
 
-                if not ('@numberMatched' in result['wfs:FeatureCollection']):
-                    LogError("Missing @numberMatched in response from: " + getfeature_url)
-                    return False
+        with global_count.get_lock(): global_count.value += 1
 
-                if not ('@numberReturned' in result['wfs:FeatureCollection']):
-                    LogError("Missing @numberReturned in response from: " + getfeature_url)
-                    return False
+    elif dataset['type'] == 'WFS':
 
-                totalrecords = int(result['wfs:FeatureCollection']['@numberMatched'])
-                batchsize = int(result['wfs:FeatureCollection']['@numberReturned'])
+        temp_output_file = temp_base + '.gpkg'
+        getfeature_url = dataset['url']
+        # We need DOWNLOAD_USER_AGENT 'User-Agent' header to allow access to scot.gov's WFS AWS servers
+        # Following direct communication with data providers (12/05/2025), 
+        # they added DOWNLOAD_USER_AGENT ('openwindenergy/*') as exception to their blacklist
+        LogMessage("Setting 'User-Agent' to " + DOWNLOAD_USER_AGENT + " to enable WFS download from specific data providers")
+        headers = {'User-Agent': DOWNLOAD_USER_AGENT}
 
-                # If batchsize is 0, suggests that there is no limit so attempt to load all records
+        # Attempt to connect to WFS using highest version
 
-                if batchsize == 0: batchsize = totalrecords
+        wfs_version = '2.0.0'
+        try:
+            wfs = WebFeatureService(url=dataset['url'], version='2.0.0', headers=headers)
+        except:
+            try:
+                wfs = WebFeatureService(url=dataset['url'], headers=headers)
+                wfs_version = wfs.version
+            except:
+                LogError("Problem accessing WFS: " + getfeature_url)
+                with global_boolean.get_lock(): global_boolean.value = 0
+                return
 
-                # Download data page by page
+        # Get correct url for 'GetFeature' as this may different from
+        # initial url providing capabilities information
 
-                LogMessage("Downloading WFS:     " + feature_name+ " [records: " + str(totalrecords) + "]")
+        methods = wfs.getOperationByName('GetFeature').methods
+        for method in methods:
+            if method['type'].lower() == 'get': getfeature_url = method['url']
 
-                dataframe, startIndex, recordsdownloaded = None, 0, 0
+        # We default to first available layer in WFS
+        # If different layer is needed, set 'layer' custom field in CKAN
 
-                while True:
+        layers = list(wfs.contents)
+        layer = layers[0]
+        if ('layer' in dataset) and (dataset['layer'] is not None): layer = dataset['layer']
 
-                    recordstodownload = totalrecords - recordsdownloaded
-                    if recordstodownload > batchsize: recordstodownload = batchsize
+        # Extract CRS from WFS layer info
 
-                    wfs_request_url = Request('GET', getfeature_url, headers=headers, params={
-                        'service': 'WFS',
-                        'version': wfs_version,
-                        'request': 'GetFeature',
-                        'typename': layer,
-                        'count': recordstodownload,
-                        'startIndex': startIndex,
-                    }).prepare().url
+        crs = str(wfs[layer].crsOptions[0]).replace('urn:ogc:def:crs:', '').replace('::', ':').replace('OGC:1.3:CRS84', 'EPSG:4326')
 
-                    LogMessage("--> Downloading: " + str(startIndex + 1) + " to " + str(startIndex + recordstodownload))
+        # Perform initial 'hits' query to get total records and pagination batch size
 
-                    try:
-                        dataframe_new = gpd.read_file(wfs_request_url).set_crs(crs)
+        params={
+            'SERVICE': 'WFS',
+            'VERSION': wfs_version,
+            'REQUEST': 'GetFeature',
+            'RESULTTYPE': 'hits',
+            'TYPENAME': layer
+        }
+        url = getfeature_url.split('?')[0] + '?' + urllib.parse.urlencode(params)
+        response = requests.get(url, headers=headers)
+        result = xmltodict.parse(response.text)
 
-                        if dataframe is None: dataframe = dataframe_new
-                        else: dataframe = pd.concat([dataframe, dataframe_new])
+        # Return False if incorrect response so we can retry again
 
-                        recordsdownloaded += recordstodownload
-                        startIndex += recordstodownload
+        if not ('wfs:FeatureCollection' in result):
+            LogError("Missing wfs:FeatureCollection in response from: " + getfeature_url)
+            with global_boolean.get_lock(): global_boolean.value = 0
+            return
 
-                        if recordsdownloaded >= totalrecords: break
-                    except:
-                        LogMessage("--> Unable to download records - possible incorrect record count from WFS [numberMatched:" + str(totalrecords) + ", numberReturned:" + str(batchsize) + "] - retrying with reduced number")
+        if not ('@numberMatched' in result['wfs:FeatureCollection']):
+            LogError("Missing @numberMatched in response from: " + getfeature_url)
+            with global_boolean.get_lock(): global_boolean.value = 0
+            return
 
-                        recordstodownload -= 1
-                        totalrecords -= 1
-                        if recordstodownload == 0: break
+        if not ('@numberReturned' in result['wfs:FeatureCollection']):
+            LogError("Missing @numberReturned in response from: " + getfeature_url)
+            with global_boolean.get_lock(): global_boolean.value = 0
+            return
 
-                dataframe.to_file(temp_output_file)
+        totalrecords = int(result['wfs:FeatureCollection']['@numberMatched'])
+        batchsize = int(result['wfs:FeatureCollection']['@numberReturned'])
 
-            elif dataset['type'] == 'GPKG':
+        # If batchsize is 0, suggests that there is no limit so attempt to load all records
 
-                LogMessage("Downloading GPKG:    " + feature_name)
-                temp_output_file = 'temp.gpkg'
-                attemptDownloadUntilSuccess(dataset['url'], temp_output_file)
+        if batchsize == 0: batchsize = totalrecords
 
-            elif dataset['type'] == 'GeoJSON':
+        # Download data page by page
 
-                LogMessage("Downloading GeoJSON: " + feature_name)
+        LogMessage("Downloading WFS:     " + feature_name+ " [records: " + str(totalrecords) + "]")
 
-                # Handle non-zipped or zipped version of GeoJSON
+        dataframe, startIndex, recordsdownloaded = None, 0, 0
 
-                if dataset['url'][-4:] != '.zip':
-                    attemptDownloadUntilSuccess(dataset['url'], temp_output_file)
-                else:
-                    zip_file = output_folder + dataset_title + '.zip'
-                    attemptDownloadUntilSuccess(dataset['url'], zip_file)
-                    with ZipFile(zip_file, 'r') as zip_ref: zip_ref.extractall(zip_folder)
-                    os.remove(zip_file)
+        while True:
 
-                    if isdir(zip_folder):
-                        unzipped_files = getFilesInFolder(zip_folder)
-                        for unzipped_file in unzipped_files:
-                            if (unzipped_file[-8:] == '.geojson'):
-                                shutil.copy(zip_folder + unzipped_file, temp_output_file)
-                        shutil.rmtree(zip_folder)
+            recordstodownload = totalrecords - recordsdownloaded
+            if recordstodownload > batchsize: recordstodownload = batchsize
 
-            elif dataset['type'] == "ArcGIS GeoServices REST API":
+            wfs_request_url = Request('GET', getfeature_url, headers=headers, params={
+                'service': 'WFS',
+                'version': wfs_version,
+                'request': 'GetFeature',
+                'typename': layer,
+                'count': recordstodownload,
+                'startIndex': startIndex,
+            }).prepare().url
 
-                query_url = f'{feature_layer_url}/query'
-                params = {"f": 'json'}
-                response = attemptPOSTUntilSuccess(feature_layer_url, params)
-                result = json.loads(response.text)
-                if 'objectIdField' not in result:
-                    error_message = feature_name + " - objectIdField missing from response to url: " + feature_layer_url
-                    if 'error' in result:
-                        if 'code' in result['error']: error_message = '[' + str(result['error']['code']) + "] " + feature_name + ' - ' + feature_layer_url
-                    LogError(error_message)
-                    LogError("Check URL and, if necessary, notify original data provider of potential problem with their data feed")
-                    return False
+            LogMessage("--> Downloading: " + str(startIndex + 1) + " to " + str(startIndex + recordstodownload))
 
-                object_id_field = result['objectIdField']
+            try:
+                dataframe_new = gpd.read_file(wfs_request_url).set_crs(crs)
 
-                params = {
-                    "f": 'json',
-                    "returnCountOnly": 'true',
-                    "where": '1=1'
-                }
+                if dataframe is None: dataframe = dataframe_new
+                else: dataframe = pd.concat([dataframe, dataframe_new])
+
+                recordsdownloaded += recordstodownload
+                startIndex += recordstodownload
+
+                if recordsdownloaded >= totalrecords: break
+            except:
+                LogMessage("--> Unable to download records - possible incorrect record count from WFS [numberMatched:" + str(totalrecords) + ", numberReturned:" + str(batchsize) + "] - retrying with reduced number")
+
+                recordstodownload -= 1
+                totalrecords -= 1
+                if recordstodownload == 0: break
+
+        dataframe.to_file(temp_output_file)
+
+        with global_count.get_lock(): global_count.value += 1
+
+    elif dataset['type'] == 'GPKG':
+
+        LogMessage("Downloading GPKG:    " + feature_name)
+        temp_output_file = temp_base + '.gpkg'
+        attemptDownloadUntilSuccess(dataset['url'], temp_output_file)
+
+        with global_count.get_lock(): global_count.value += 1
+
+    elif dataset['type'] == 'GeoJSON':
+
+        LogMessage("Downloading GeoJSON: " + feature_name)
+
+        # Handle non-zipped or zipped version of GeoJSON
+
+        if dataset['url'][-4:] != '.zip':
+            attemptDownloadUntilSuccess(dataset['url'], temp_output_file)
+        else:
+            zip_file = output_folder + dataset_title + '.zip'
+            attemptDownloadUntilSuccess(dataset['url'], zip_file)
+            with ZipFile(zip_file, 'r') as zip_ref: zip_ref.extractall(zip_folder)
+            os.remove(zip_file)
+
+            if isdir(zip_folder):
+                unzipped_files = getFilesInFolder(zip_folder)
+                for unzipped_file in unzipped_files:
+                    if (unzipped_file[-8:] == '.geojson'):
+                        shutil.copy(zip_folder + unzipped_file, temp_output_file)
+                shutil.rmtree(zip_folder)
+
+        with global_count.get_lock(): global_count.value += 1
+
+    elif dataset['type'] == "ArcGIS GeoServices REST API":
+
+        query_url = f'{feature_layer_url}/query'
+        params = {"f": 'json'}
+        response = attemptPOSTUntilSuccess(feature_layer_url, params)
+        result = json.loads(response.text)
+        if 'objectIdField' not in result:
+            error_message = feature_name + " - objectIdField missing from response to url: " + feature_layer_url
+            if 'error' in result:
+                if 'code' in result['error']: error_message = '[' + str(result['error']['code']) + "] " + feature_name + ' - ' + feature_layer_url
+            LogError(error_message)
+            LogError("Check URL and, if necessary, notify original data provider of potential problem with their data feed")
+            with global_boolean.get_lock(): global_boolean.value = 0
+            return
+
+        object_id_field = result['objectIdField']
+
+        params = {
+            "f": 'json',
+            "returnCountOnly": 'true',
+            "where": '1=1'
+        }
+
+        response = attemptPOSTUntilSuccess(query_url, params)
+        result = json.loads(response.text)
+        if 'count' not in result: 
+            error_message = feature_name + " - 'count' missing from response to url: " + query_url
+            if 'error' in result:
+                if 'code' in result['error']: error_message = '[' + str(result['error']['code']) + "] " + feature_name + ' - ' + query_url
+            LogError(error_message)
+            LogError("Check URL and, if necessary, notify original data provider of potential problem with their data feed")
+            with global_boolean.get_lock(): global_boolean.value = 0
+            return
+
+        no_of_records = result['count']
+
+        LogMessage("Downloading ArcGIS:  " + feature_name + " [records: " + str(no_of_records) + "]")
+
+        records_downloaded = 0
+        object_id = -1
+
+        geojson = {
+            "type": "FeatureCollection",
+            "features": []
+        }
+
+        while records_downloaded < no_of_records:
+            params = {
+                "f": 'geojson',
+                "outFields": '*',
+                "outSR": 4326, # change the spatial reference if needed (normally GeoJSON uses 4326 for the spatial reference)
+                "returnGeometry": 'true',
+                "where": f'{object_id_field} > {object_id}'
+            }
+
+            firstpass = True
+
+            while True:
+
+                if not firstpass: LogMessage("Attempting to download after first failed attempt: " + query_url)
+                firstpass = False
 
                 response = attemptPOSTUntilSuccess(query_url, params)
                 result = json.loads(response.text)
-                if 'count' not in result: 
-                    error_message = feature_name + " - 'count' missing from response to url: " + query_url
-                    if 'error' in result:
-                        if 'code' in result['error']: error_message = '[' + str(result['error']['code']) + "] " + feature_name + ' - ' + query_url
-                    LogError(error_message)
-                    LogError("Check URL and, if necessary, notify original data provider of potential problem with their data feed")
-                    return False
 
-                no_of_records = result['count']
+                if 'features' not in result:
+                    LogWarning("Problem with url, retrying after delay...")
+                    time.sleep(5)
+                    continue
 
-                LogMessage("Downloading ArcGIS:  " + feature_name + " [records: " + str(no_of_records) + "]")
+                if(len(result['features'])):
+                    geojson['features'] += result['features']
+                    records_downloaded += len(result['features'])
+                    object_id = result['features'][len(result['features'])-1]['properties'][object_id_field]
+                else:
+                    LogWarning("Problem with url, retrying after delay...")
+                    time.sleep(5)
 
-                records_downloaded = 0
-                object_id = -1
+                    '''
+                        this should not be needed but is here as an extra step to avoid being
+                        stuck in a loop if there is something wrong with the service, i.e. the
+                        record count stored with the service is incorrect and does not match the
+                        actual record count (which can happen).
+                    '''
+                break
 
-                geojson = {
-                    "type": "FeatureCollection",
-                    "features": []
-                }
+        if(records_downloaded != no_of_records):
+            LogMessage("--- ### Note, the record count for the feature layer (" + feature_name + ") is incorrect - this is a bug in the service itself ### ---")
 
-                while records_downloaded < no_of_records:
-                    params = {
-                        "f": 'geojson',
-                        "outFields": '*',
-                        "outSR": 4326, # change the spatial reference if needed (normally GeoJSON uses 4326 for the spatial reference)
-                        "returnGeometry": 'true',
-                        "where": f'{object_id_field} > {object_id}'
-                    }
+        with open(temp_output_file, 'w') as f:
+            f.write(json.dumps(geojson, indent=2))
 
-                    firstpass = True
+        with global_count.get_lock(): global_count.value += 1
 
-                    while True:
-
-                        if not firstpass: LogMessage("Attempting to download after first failed attempt: " + query_url)
-                        firstpass = False
-
-                        response = attemptPOSTUntilSuccess(query_url, params)
-                        result = json.loads(response.text)
-
-                        if 'features' not in result:
-                            LogWarning("Problem with url, retrying after delay...")
-                            time.sleep(5)
-                            continue
-
-                        if(len(result['features'])):
-                            geojson['features'] += result['features']
-                            records_downloaded += len(result['features'])
-                            object_id = result['features'][len(result['features'])-1]['properties'][object_id_field]
-                        else:
-                            LogWarning("Problem with url, retrying after delay...")
-                            time.sleep(5)
-
-                            '''
-                                this should not be needed but is here as an extra step to avoid being
-                                stuck in a loop if there is something wrong with the service, i.e. the
-                                record count stored with the service is incorrect and does not match the
-                                actual record count (which can happen).
-                            '''
-                        break
-
-                if(records_downloaded != no_of_records):
-                    LogMessage("--- ### Note, the record count for the feature layer (" + feature_name + ") is incorrect - this is a bug in the service itself ### ---")
-
-                with open(temp_output_file, 'w') as f:
-                    f.write(json.dumps(geojson, indent=2))
-
-            # Produces final GeoJSON/GPKG by converting and applying 'dataset_title' as layer name
-            if isfile(temp_output_file):
-                if ('.geojson' in temp_output_file):
-                    reformatGeoJSON(temp_output_file)
-                    inputs = runSubprocess(["ogr2ogr", "-f", "GeoJSON", "-nln", dataset_title, "-nlt", "GEOMETRY", output_file, temp_output_file])
-                if ('.gpkg' in temp_output_file):
-                    orig_srs = getGPKGProjection(temp_output_file)
-                    inputs = runSubprocess([ "ogr2ogr", \
-                                    "-f", "gpkg", \
-                                    "-nln", dataset_title, \
-                                    "-nlt", "GEOMETRY", \
-                                    output_gpkg_file, \
-                                    temp_output_file, \
-                                    "-s_srs", orig_srs, \
-                                    "-t_srs", WORKING_CRS])
-                os.remove(temp_output_file)
-
-    return True
-
+    # Produces final GeoJSON/GPKG by converting and applying 'dataset_title' as layer name
+    if isfile(temp_output_file):
+        if ('.geojson' in temp_output_file):
+            reformatGeoJSON(temp_output_file)
+            inputs = runSubprocess(["ogr2ogr", "-f", "GeoJSON", "-nln", dataset_title, "-nlt", "GEOMETRY", output_file, temp_output_file])
+        if ('.gpkg' in temp_output_file):
+            orig_srs = getGPKGProjection(temp_output_file)
+            inputs = runSubprocess([ "ogr2ogr", \
+                            "-f", "gpkg", \
+                            "-nln", dataset_title, \
+                            "-nlt", "GEOMETRY", \
+                            output_gpkg_file, \
+                            temp_output_file, \
+                            "-s_srs", orig_srs, \
+                            "-t_srs", WORKING_CRS])
+        os.remove(temp_output_file)
+    
 def deleteFolderContentsKeepFolder(folder):
     """
     Deletes contents of folder but keep folder - needed for when docker compose manages folder mappings
@@ -2401,23 +2579,81 @@ def initPipeline(command_line):
 
         LogMessage("Importing into PostGIS: " + basename(osm_boundaries_gpkg))
 
-        # Note: clipping on OVERALL_CLIPPING_FILE as some osm boundaries - esp UK nations - are not clipped tightly on coastlines
-        subprocess_list = [ "ogr2ogr", \
-                            "-f", "PostgreSQL", \
-                            'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
-                            osm_boundaries_gpkg, \
-                            "-makevalid", \
-                            "-overwrite", \
-                            "-lco", "GEOMETRY_NAME=geom", \
-                            "-lco", "OVERWRITE=YES", \
-                            "-nln", osm_boundaries_table, \
-                            "-skipfailures", \
-                            "-s_srs", osm_boundaries_projection, \
-                            "-t_srs", WORKING_CRS, \
-                            "-clipsrc", WORKING_FOLDER + OVERALL_CLIPPING_FILE, \
-                            "--config", "OGR_PG_ENABLE_METADATA", "NO"]
+        # # Note: clipping on OVERALL_CLIPPING_FILE as some osm boundaries - esp UK nations - are not clipped tightly on coastlines
+        # subprocess_list = [ "ogr2ogr", \
+        #                     "-f", "PostgreSQL", \
+        #                     'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
+        #                     osm_boundaries_gpkg, \
+        #                     "-makevalid", \
+        #                     "-overwrite", \
+        #                     "-lco", "GEOMETRY_NAME=geom", \
+        #                     "-lco", "OVERWRITE=YES", \
+        #                     "-nln", osm_boundaries_table, \
+        #                     "-skipfailures", \
+        #                     "-s_srs", osm_boundaries_projection, \
+        #                     "-t_srs", WORKING_CRS, \
+        #                     "-clipsrc", WORKING_FOLDER + OVERALL_CLIPPING_FILE, \
+        #                     "--config", "OGR_PG_ENABLE_METADATA", "NO", \
+        #                     "--config", "PG_USE_COPY", "YES" ]
 
-        inputs = runSubprocess(subprocess_list)
+        scratch_table_1 = '_scratch_table_clipping'
+        scratch_table_2 = '_scratch_table_preclipped_boundaries'
+        overall_clipping_layer = reformatTableName(OVERALL_CLIPPING_FILE)
+
+        if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+        if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
+
+        LogMessage(" --> Step 1: Importing overall clipping layer (dissolved) into scratch table")
+
+        runSubprocess([ "ogr2ogr", \
+                        "-f", "PostgreSQL", \
+                        'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
+                        OVERALL_CLIPPING_FILE, \
+                        "-nln", scratch_table_1, \
+                        "-nlt", "MULTIPOLYGON", \
+                        "-sql", \
+                        "SELECT ST_Union(geom) geom FROM 'uk-clipping'", \
+                        "--config", "OGR_PG_ENABLE_METADATA", "NO", \
+                        "--config", "PG_USE_COPY", "YES" ])
+
+        LogMessage(" --> Step 2: Importing unclipped boundaries into scratch table")
+
+        # Note: clipping on OVERALL_CLIPPING_FILE as some osm boundaries - esp UK nations - are not clipped tightly on coastlines
+        runSubprocess([ "ogr2ogr", \
+                        "-f", "PostgreSQL", \
+                        'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
+                        osm_boundaries_gpkg, \
+                        "-nln", scratch_table_2, \
+                        "-nlt", "MULTIPOLYGON", \
+                        "--config", "OGR_PG_ENABLE_METADATA", "NO", \
+                        "--config", "PG_USE_COPY", "YES" ])
+
+        LogMessage(" --> Step 3: Clipping partially overlapping polygons")
+
+        postgisExec("""
+        CREATE TABLE %s AS 
+            SELECT data.fid, data.osm_id, data.name, data.council_name, data.boundary, data.admin_level, ST_Intersection(clipping.geom, data.geom) geom
+            FROM %s data, %s clipping 
+            WHERE 
+                (NOT ST_Contains(clipping.geom, data.geom) AND 
+                ST_Intersects(clipping.geom, data.geom));""", \
+            (AsIs(osm_boundaries_table), AsIs(scratch_table_2), AsIs(scratch_table_1), ))
+
+        LogMessage(" --> Step 4: Adding fully enclosed polygons")
+
+        postgisExec("""
+        INSERT INTO %s  
+            SELECT data.fid, data.osm_id, data.name, data.council_name, data.boundary, data.admin_level, data.geom  
+            FROM %s data, %s clipping 
+            WHERE 
+                ST_Contains(clipping.geom, data.geom);""", \
+            (AsIs(osm_boundaries_table), AsIs(scratch_table_2), AsIs(scratch_table_1), ))
+
+        if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+        if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
+
+        LogMessage(" --> COMPLETED: Processed table: " + osm_boundaries_table)
+        LogMessage("------------------------------------------------------------")
 
         # Once imported, add index to 'name', 'council_name' and 'admin_level' fields
         if postgisCheckTableExists(osm_boundaries_table):
@@ -2945,6 +3181,7 @@ def runProcessingOnDownloads(output_folder):
 
     # Export from database first...
 
+    filecopy_queue = []
     for finallayer in finallayers:
         finallayer_table = reformatTableName(finallayer)
         core_dataset_name = getFinalLayerCoreDatasetName(finallayer_table)
@@ -2977,11 +3214,13 @@ def runProcessingOnDownloads(output_folder):
             if isfile(temp_gpkg): os.remove(temp_gpkg)
 
         # Always copy to latest just to be safe
-        LogMessage("Copying final layer GPKG to: " + finallayer_latest_file_gpkg)
-        shutil.copy(finallayer_file_gpkg, finallayer_latest_file_gpkg)
+        filecopy_queue.append(["Copying final layer GPKG to: " + finallayer_latest_file_gpkg, finallayer_file_gpkg, finallayer_latest_file_gpkg])
+
+    multiprocessFileCopy(filecopy_queue)
 
     # Then use ogr2ogr without PostGIS to convert exported GPKG to other formats - GeoJSON and SHP
 
+    filecopy_queue = []
     for finallayer in finallayers:
         finallayer_table = reformatTableName(finallayer)
         core_dataset_name = getFinalLayerCoreDatasetName(finallayer_table)
@@ -3014,7 +3253,7 @@ def runProcessingOnDownloads(output_folder):
                 shutil.copy(temp_individual_shp, finallayer_file_shp.replace('shp', shp_extension))
                 if isfile(temp_individual_shp): os.remove(temp_individual_shp)
 
-        # Always copy to latest just to be safe
+        # Always copy to latest just to be safe - can't easily use multiprocessFileCopy as we need SHP to convert to GeoJSON
         LogMessage("Copying final layer SHP to: " + finallayer_latest_file_shp)
         for shp_extension in shp_extensions:
             shutil.copy(finallayer_file_shp.replace('shp', shp_extension), finallayer_latest_file_shp.replace('shp', shp_extension))
@@ -3033,9 +3272,9 @@ def runProcessingOnDownloads(output_folder):
             if isfile(temp_geojson): os.remove(temp_geojson)
 
         # Always copy to latest just to be safe
-        LogMessage("Copying final layer GeoJSON to: " + finallayer_latest_file_geojson)
-        shutil.copy(finallayer_file_geojson, finallayer_latest_file_geojson)
+        filecopy_queue.append(["Copying final layer GeoJSON to: " + finallayer_latest_file_geojson, finallayer_file_geojson, finallayer_latest_file_geojson])
 
+    multiprocessFileCopy(filecopy_queue)
 
     LogMessage("All final layers converted to GPKG, SHP and GeoJSON")
 
@@ -3497,114 +3736,117 @@ def buildQGISFile():
 # ***********************************************************
 # ***********************************************************
 
-makeFolder(BUILD_FOLDER)
+initLogging()
 
-if isfile(LOG_SINGLE_PASS): os.remove(LOG_SINGLE_PASS)
+def main():
+    """
+    Main function - put here to allow multiprocessing to work
+    """
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)-2s] %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_SINGLE_PASS),
-        logging.FileHandler("{0}/{1}.log".format(BUILD_FOLDER, datetime.today().strftime('%Y-%m-%d'))),
-        logging.StreamHandler()
-    ]
-)
+    global SERVER_BUILD
+    global BUILD_FOLDER, LOG_SINGLE_PASS, PROCESSING_COMPLETE_FILE, HEIGHT_TO_TIP, BLADE_RADIUS
+    global CUSTOM_CONFIGURATION, REGENERATE_INPUT, REGENERATE_OUTPUT, PERFORM_DOWNLOAD, SKIP_FONTS_INSTALLATION
+    global CKAN_URL, DATASETS_DOWNLOADS_FOLDER, PROCESSING_COMPLETE_FILE, PROCESSING_STATE_FILE
 
-if isfile(PROCESSING_COMPLETE_FILE):
-    LogMessage("Previous build run complete, aborting this run")
-    exit(0)
+    makeFolder(BUILD_FOLDER)
 
-time.sleep(3)
+    if isfile(LOG_SINGLE_PASS): os.remove(LOG_SINGLE_PASS)
 
-print("""\033[1;34m
+    if SERVER_BUILD:
+        if isfile(PROCESSING_COMPLETE_FILE):
+            LogMessage("Previous build run complete, aborting this run")
+            exit(0)
+
+    time.sleep(3)
+
+    print("""\033[1;34m
 ***********************************************************************
 ******************** OPEN WIND ENERGY DATA PIPELINE *******************
 ***********************************************************************
 \033[0m""")
 
-with open('PROCESSINGSTART', 'w', encoding='utf-8') as file: 
-    file.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S,000 Processing started"))
+    with open('PROCESSINGSTART', 'w', encoding='utf-8') as file: 
+        file.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S,000 Processing started"))
 
-LogMessage("***********************************************************************")
-LogMessage("*************** Starting Open Wind Energy data pipeline ***************")
-LogMessage("***********************************************************************")
-LogMessage("")
+    LogMessage("***********************************************************************")
+    LogMessage("*************** Starting Open Wind Energy data pipeline ***************")
+    LogMessage("***********************************************************************")
+    LogMessage("")
 
-postgisWaitRunning()
+    postgisWaitRunning()
 
-LogMessage("Processing command line arguments...")
+    LogMessage("Processing command line arguments...")
 
-if len(sys.argv) > 1:
-    arg_index, height_to_tip_set, blade_radius_set = 0, False, False
-    for arg in sys.argv:
-        arg = arg.strip()
-        if isfloat(arg):
-            if not height_to_tip_set:
-                HEIGHT_TO_TIP = float(arg)
-                height_to_tip_set = True
-                LogMessage("************ Using HEIGHT_TO_TIP value: " + formatValue(HEIGHT_TO_TIP) + ' metres ************')
-            else:
-                BLADE_RADIUS = float(arg)
-                blade_radius_set = True
-                LogMessage("************ Using BLADE_RADIUS value: " + formatValue(BLADE_RADIUS) + ' metres ************')
+    if len(sys.argv) > 1:
+        arg_index, height_to_tip_set, blade_radius_set = 0, False, False
+        for arg in sys.argv:
+            arg = arg.strip()
+            if isfloat(arg):
+                if not height_to_tip_set:
+                    HEIGHT_TO_TIP = float(arg)
+                    height_to_tip_set = True
+                    LogMessage("************ Using HEIGHT_TO_TIP value: " + formatValue(HEIGHT_TO_TIP) + ' metres ************')
+                else:
+                    BLADE_RADIUS = float(arg)
+                    blade_radius_set = True
+                    LogMessage("************ Using BLADE_RADIUS value: " + formatValue(BLADE_RADIUS) + ' metres ************')
 
-        if arg == '--custom':
-            if len(sys.argv) > arg_index:
-                customconfig = sys.argv[arg_index + 1]
-                LogMessage("--custom argument passed: Using custom configuration '" + customconfig + "'")
-                CUSTOM_CONFIGURATION = processCustomConfiguration(customconfig)
+            if arg == '--custom':
+                if len(sys.argv) > arg_index:
+                    customconfig = sys.argv[arg_index + 1]
+                    LogMessage("--custom argument passed: Using custom configuration '" + customconfig + "'")
+                    CUSTOM_CONFIGURATION = processCustomConfiguration(customconfig)
 
-        if arg == '--clip':
-            if len(sys.argv) > arg_index:
-                # *** This will override any 'clipping' setting in '--custom', above
-                clippingarea = sys.argv[arg_index + 1]
-                LogMessage("--clip argument passed: Using custom clipping area '" + clippingarea + "'")
-                CUSTOM_CONFIGURATION = processClippingArea(clippingarea)
+            if arg == '--clip':
+                if len(sys.argv) > arg_index:
+                    # *** This will override any 'clipping' setting in '--custom', above
+                    clippingarea = sys.argv[arg_index + 1]
+                    LogMessage("--clip argument passed: Using custom clipping area '" + clippingarea + "'")
+                    CUSTOM_CONFIGURATION = processClippingArea(clippingarea)
 
-        if arg == '--purgeall':
-            LogMessage("--purgeall argument passed: Clearing database and all build files")
-            REGENERATE_INPUT = True
-            REGENERATE_OUTPUT = True
-            purgeAll()
+            if arg == '--purgeall':
+                LogMessage("--purgeall argument passed: Clearing database and all build files")
+                REGENERATE_INPUT = True
+                REGENERATE_OUTPUT = True
+                purgeAll()
 
-        if arg == '--purgedb':
-            LogMessage("--purgedb argument passed: Clearing database")
-            REGENERATE_INPUT = True
-            REGENERATE_OUTPUT = True
-            postgisDropAllTables()
+            if arg == '--purgedb':
+                LogMessage("--purgedb argument passed: Clearing database")
+                REGENERATE_INPUT = True
+                REGENERATE_OUTPUT = True
+                postgisDropAllTables()
 
-        if arg == '--purgederived':
-            LogMessage("--purgederived argument passed: Clearing derived database tables")
-            REGENERATE_OUTPUT = True
-            postgisDropDerivedTables()
+            if arg == '--purgederived':
+                LogMessage("--purgederived argument passed: Clearing derived database tables")
+                REGENERATE_OUTPUT = True
+                postgisDropDerivedTables()
 
-        if arg == '--purgeamalgamated':
-            LogMessage("--purgeamalgamated argument passed: Clearing amalgamated database tables")
-            REGENERATE_OUTPUT = True
-            postgisDropAmalgamatedTables()
+            if arg == '--purgeamalgamated':
+                LogMessage("--purgeamalgamated argument passed: Clearing amalgamated database tables")
+                REGENERATE_OUTPUT = True
+                postgisDropAmalgamatedTables()
 
-        if arg == '--skipdownload':
-            LogMessage("--skipdownload argument passed: Skipping download stage")
-            PERFORM_DOWNLOAD = False
+            if arg == '--skipdownload':
+                LogMessage("--skipdownload argument passed: Skipping download stage")
+                PERFORM_DOWNLOAD = False
 
-        if arg == '--skipfonts':
-            LogMessage("--skipfonts argument passed: Skipping font installation and using hosted CDN fonts")
-            SKIP_FONTS_INSTALLATION = True
+            if arg == '--skipfonts':
+                LogMessage("--skipfonts argument passed: Skipping font installation and using hosted CDN fonts")
+                SKIP_FONTS_INSTALLATION = True
 
-        if arg == '--buildtileserver':
-            LogMessage("--buildtileserver argument passed: Building files required for tileserver")
-            buildTileserverFiles()
-            exit()
+            if arg == '--buildtileserver':
+                LogMessage("--buildtileserver argument passed: Building files required for tileserver")
+                buildTileserverFiles()
+                exit()
 
-        if arg == '--regenerate':
-            if len(sys.argv) > arg_index:
-                regeneratedataset = sys.argv[arg_index + 1]
-                LogMessage("--regenerate argument passed: Redownloading and rebuilding all tables related to " + regeneratedataset)
-                deleteDatasetAndAncestors(regeneratedataset)
+            if arg == '--regenerate':
+                if len(sys.argv) > arg_index:
+                    regeneratedataset = sys.argv[arg_index + 1]
+                    LogMessage("--regenerate argument passed: Redownloading and rebuilding all tables related to " + regeneratedataset)
+                    deleteDatasetAndAncestors(regeneratedataset)
 
-        if arg == '--help':
-            print("""
+            if arg == '--help':
+                print("""
 Command syntax:
 
 python3 openwindenergy.py
@@ -3630,18 +3872,21 @@ Possible additional arguments:
 --buildtileserver      Rebuild files for tileserver.
 
 """)
-            exit()
+                exit()
 
-        arg_index += 1
+            arg_index += 1
 
-initPipeline(rebuildCommandLine(sys.argv))
+    initPipeline(rebuildCommandLine(sys.argv))
 
-if PERFORM_DOWNLOAD:
-    downloadDatasets(CKAN_URL, DATASETS_DOWNLOADS_FOLDER)
+    if PERFORM_DOWNLOAD:
+        downloadDatasets(CKAN_URL, DATASETS_DOWNLOADS_FOLDER)
 
-runProcessingOnDownloads(DATASETS_DOWNLOADS_FOLDER)
+    runProcessingOnDownloads(DATASETS_DOWNLOADS_FOLDER)
 
-# Set up status flag files
+    # Set up status flag files
 
-with open(PROCESSING_COMPLETE_FILE, 'w') as file: file.write("PROCESSINGCOMPLETE")
-if isfile(PROCESSING_STATE_FILE): os.remove(PROCESSING_STATE_FILE)
+    with open(PROCESSING_COMPLETE_FILE, 'w') as file: file.write("PROCESSINGCOMPLETE")
+    if isfile(PROCESSING_STATE_FILE): os.remove(PROCESSING_STATE_FILE)
+
+if __name__ == "__main__":
+    main()
