@@ -3736,6 +3736,8 @@ def buildQGISFile():
 # ***********************************************************
 # ***********************************************************
 
+if isfile(LOG_SINGLE_PASS): os.remove(LOG_SINGLE_PASS)
+
 initLogging()
 
 def main():
@@ -3749,8 +3751,6 @@ def main():
     global CKAN_URL, DATASETS_DOWNLOADS_FOLDER, PROCESSING_COMPLETE_FILE, PROCESSING_STATE_FILE
 
     makeFolder(BUILD_FOLDER)
-
-    if isfile(LOG_SINGLE_PASS): os.remove(LOG_SINGLE_PASS)
 
     if SERVER_BUILD:
         if isfile(PROCESSING_COMPLETE_FILE):

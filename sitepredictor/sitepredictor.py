@@ -4314,7 +4314,9 @@ def main():
     Main function - put here to allow multiprocessing to work
     """
 
-    global RASTER_RESOLUTION, SAMPLING_GRID
+    global RASTER_RESOLUTION, SAMPLING_GRID, LOG_SINGLE_PASS
+
+    if isfile(LOG_SINGLE_PASS): os.remove(LOG_SINGLE_PASS)
 
     final_raster_resolution = RASTER_RESOLUTION
     batch_grid_spacing = None
