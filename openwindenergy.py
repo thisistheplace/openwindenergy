@@ -3736,10 +3736,6 @@ def buildQGISFile():
 # ***********************************************************
 # ***********************************************************
 
-if isfile(LOG_SINGLE_PASS): os.remove(LOG_SINGLE_PASS)
-
-initLogging()
-
 def main():
     """
     Main function - put here to allow multiprocessing to work
@@ -3888,5 +3884,11 @@ Possible additional arguments:
     with open(PROCESSING_COMPLETE_FILE, 'w') as file: file.write("PROCESSINGCOMPLETE")
     if isfile(PROCESSING_STATE_FILE): os.remove(PROCESSING_STATE_FILE)
 
+# Only remove log file on main thread
 if __name__ == "__main__":
-    main()
+    if isfile(LOG_SINGLE_PASS): os.remove(LOG_SINGLE_PASS)
+
+# Always initialise logging so multiprocessing threads get logged
+initLogging()
+
+if __name__ == "__main__": main()

@@ -4316,8 +4316,6 @@ def main():
 
     global RASTER_RESOLUTION, SAMPLING_GRID, LOG_SINGLE_PASS
 
-    if isfile(LOG_SINGLE_PASS): os.remove(LOG_SINGLE_PASS)
-
     final_raster_resolution = RASTER_RESOLUTION
     batch_grid_spacing = None
 
@@ -4362,7 +4360,11 @@ def main():
 
     runSitePredictor(batch_grid_spacing, final_raster_resolution)
 
+# Only remove log file on main thread
+if __name__ == "__main__":
+    if isfile(LOG_SINGLE_PASS): os.remove(LOG_SINGLE_PASS)
+
+# Always initialise logging so multiprocessing threads get logged
 initLogging()
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
