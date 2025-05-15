@@ -445,7 +445,8 @@ def makeFolder(folderpath):
     Make folder if it doesn't already exist
     """
 
-    if not exists(folderpath): makedirs(folderpath)
+    if folderpath.endswith(os.path.sep): folderpath = folderpath[:-1]
+    if not isdir(folderpath): makedirs(folderpath)
 
 def processCSVFile(file_path):
     """
@@ -786,8 +787,6 @@ def createDistanceRaster(raster_resolution, input, output, batch_index, batch_gr
 
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
     global CLIPPING_PATH, RASTER_OUTPUT_FOLDER
-
-    makeFolder(RASTER_OUTPUT_FOLDER)
 
     if not isfile(output):
 
@@ -3599,6 +3598,9 @@ def createDistanceRasters(raster_resolution, tables, batch_index, batch_grid_spa
 
     global RASTER_OUTPUT_FOLDER
 
+    # Create folder for rasters
+    makeFolder(RASTER_OUTPUT_FOLDER)
+
     for table in tables:
 
         feature_raster = RASTER_OUTPUT_FOLDER + table + '.tif'
@@ -3751,7 +3753,7 @@ def createSamplingGridData(batch_values):
         batch_index, batch_grid_spacing, raster_resolution = batch_values[0], batch_values[1], batch_values[2]
 
     LogMessage("========================================")
-    LogMessage("== Starting batch: " + str(batch_index) + " " + str(batch_grid_spacing))
+    LogMessage("Starting batch: " + str(batch_index) + " " + str(batch_grid_spacing))
     LogMessage("========================================")
 
     # ************************************************************
@@ -3843,7 +3845,7 @@ def createSamplingGridData(batch_values):
     for index in range(len(sample_grid)):
         turbine = {}
 
-        if index % 100 == 0:
+        if index % 1000 == 0:
             with cnt.get_lock():
                 LogMessage("Processing hypothetical turbine position: " + str(cnt.value) + "/" + str(total_points))
                 cnt.value += (index - added_to_count)
@@ -4004,7 +4006,7 @@ def createSamplingGridData(batch_values):
         added_to_count = index
 
     LogMessage("========================================")
-    LogMessage("== Ending batch: " + str(batch_index))
+    LogMessage("Ending batch: " + str(batch_index))
     LogMessage("========================================")
 
 def createAllTurbinesData():
@@ -4217,7 +4219,7 @@ def runSitePredictor(batch_grid_spacing, raster_resolution):
     # Michael Harper, Ben Anderson, Patrick A.B. James, AbuBakr S. Bahaj (2019)
     # https://www.sciencedirect.com/science/article/pii/S0301421519300023
 
-    global OUTPUT_DATA_SAMPLEGRID, CLIPPING_FOLDER, DEFAULT_BATCH_GRID_SPACING
+    global RASTER_OUTPUT_FOLDER, OUTPUT_DATA_SAMPLEGRID, CLIPPING_FOLDER, DEFAULT_BATCH_GRID_SPACING
 
     createAllTurbinesData()
 
@@ -4314,7 +4316,7 @@ def main():
     Main function - put here to allow multiprocessing to work
     """
 
-    global RASTER_RESOLUTION, SAMPLING_GRID, LOG_SINGLE_PASS
+    global RASTER_RESOLUTION, SAMPLING_GRID, LOG_SINGLE_PASS, RASTER_OUTPUT_FOLDER
 
     final_raster_resolution = RASTER_RESOLUTION
     batch_grid_spacing = None
@@ -4347,6 +4349,8 @@ def main():
             arg_index += 1
 
         if resample:
+            # Delete RASTER_OUTPUT_FOLDER just to be safe
+            shutil.rmtree(RASTER_OUTPUT_FOLDER)
             files_to_delete =   [ \
                                     buildOutputPath(OUTPUT_DATA_SAMPLEGRID, final_raster_resolution), \
                                     buildOutputPath(OUTPUT_ML_GEOJSON, final_raster_resolution), \

@@ -86,7 +86,7 @@ if os.environ.get("TILESERVER_URL") is not None: TILESERVER_URL = os.environ.get
 
 OPENWINDENERGY_VERSION              = "1.0"
 TEMP_FOLDER                         = "temp/"
-USE_MULTIPROCESSING                 = False
+USE_MULTIPROCESSING                 = True
 if SERVER_BUILD: USE_MULTIPROCESSING = True
 DEFAULT_HEIGHT_TO_TIP               = 124.2     # Based on openwind's own manual data on all large (>=75 m to tip-height) failed and successful UK onshore wind projects
 DEFAULT_BLADE_RADIUS                = 47.8      # Based on openwind's own manual data on all large (>=75 m to tip-height) failed and successful UK onshore wind projects
@@ -266,7 +266,8 @@ def makeFolder(folderpath):
     Make folder if it doesn't already exist
     """
 
-    if not exists(folderpath): makedirs(folderpath)
+    if folderpath.endswith(os.path.sep): folderpath = folderpath[:-1]
+    if not isdir(folderpath): makedirs(folderpath)
 
 def getFilesInFolder(folderpath):
     """
@@ -2293,8 +2294,25 @@ def downloadDataset(dataset_parameters):
     elif dataset['type'] == 'GPKG':
 
         LogMessage("Downloading GPKG:    " + feature_name)
+
         temp_output_file = temp_base + '.gpkg'
-        attemptDownloadUntilSuccess(dataset['url'], temp_output_file)
+
+        # Handle non-zipped or zipped version of GPKG
+
+        if not dataset['url'].endswith('.zip'):
+            attemptDownloadUntilSuccess(dataset['url'], temp_output_file)
+        else:
+            zip_file = output_folder + dataset_title + '.zip'
+            attemptDownloadUntilSuccess(dataset['url'], zip_file)
+            with ZipFile(zip_file, 'r') as zip_ref: zip_ref.extractall(zip_folder)
+            os.remove(zip_file)
+
+            if isdir(zip_folder):
+                unzipped_files = getFilesInFolder(zip_folder)
+                for unzipped_file in unzipped_files:
+                    if unzipped_file.endswith('.gpkg'):
+                        shutil.copy(zip_folder + unzipped_file, temp_output_file)
+                shutil.rmtree(zip_folder)
 
         with global_count.get_lock(): global_count.value += 1
 
@@ -2692,6 +2710,77 @@ def getCountryFromArea(area):
 
     return None
 
+def importDataset(dataset_parameters):
+    """
+    Imports dataset into PostGIS
+    """
+
+    downloaded_file, output_folder, imported_table, core_dataset_name = dataset_parameters[0], dataset_parameters[1], dataset_parameters[2], dataset_parameters[3]
+
+    LogMessage("Started importing into PostGIS:  " + downloaded_file)
+
+    downloaded_file_fullpath = output_folder + downloaded_file
+
+    sql_where_clause = None
+    orig_srs = 'EPSG:4326'
+
+    if downloaded_file.endswith('.geojson'):
+
+        # Check GeoJSON for crs
+        # If missing and in Northern Ireland, then use EPSG:29903
+        # If missing and not in Northern Ireland, use EPSG:27700
+
+        json_data = json.load(open(downloaded_file_fullpath))
+
+        if 'crs' in json_data:
+            orig_srs = json_data['crs']['properties']['name'].replace('urn:ogc:def:crs:', '').replace('::', ':').replace('OGC:1.3:CRS84', 'EPSG:4326')
+        else:
+            # DataMapWales' GeoJSON use EPSG:27700 even though default SRS for GeoJSON is EPSG:4326
+            if 'wales' in downloaded_file: orig_srs = 'EPSG:27700'
+            # Improvement Service GeoJSON uses EPSG:27700
+            if 'local-nature-reserves--scotland' in downloaded_file: orig_srs = 'EPSG:27700'
+
+            # Tricky - Northern Ireland could be in correct GeoJSON without explicit crs (so EPSG:4326) or could be incorrect non-EPSG:4326 meters with non GB datum
+            if 'northern-ireland' in downloaded_file: orig_srs = 'EPSG:29903'
+            # ... so provide exceptions
+            if downloaded_file in ['world-heritage-sites--northern-ireland.geojson']: orig_srs = 'EPSG:4326'
+
+        # Historic England Conservation Areas includes 'no data' polygons so remove as too restrictive
+        if not DEBUG_RUN:
+            if downloaded_file == 'conservation-areas--england.geojson': sql_where_clause = "Name NOT LIKE 'No data%'"
+
+    # We set CRS=WORKING_CRS during download phase
+    if downloaded_file.endswith('.gpkg'): orig_srs = WORKING_CRS
+
+    # Strange bug in ogr2ogr where sometimes fails on GeoJSON with sqlite
+    # Therefore avoid using sqlite unless absolutely necessary
+    # Don't specify geometry type yet in order to preserve lines and polygons
+    subprocess_list = [ "ogr2ogr", \
+                        "-f", "PostgreSQL", \
+                        'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
+                        downloaded_file_fullpath, \
+                        "-makevalid", \
+                        "-overwrite", \
+                        "-lco", "GEOMETRY_NAME=geom", \
+                        "-lco", "OVERWRITE=YES", \
+                        "-nln", imported_table, \
+                        "-nlt", "PROMOTE_TO_MULTI", \
+                        "-skipfailures", \
+                        "-s_srs", orig_srs, \
+                        "-t_srs", WORKING_CRS, \
+                        "--config", "PG_USE_COPY", "YES" ]
+
+    if sql_where_clause is not None:
+        for extraitem in ["-dialect", "sqlite", "-sql", "SELECT * FROM '" + core_dataset_name + "' WHERE " + sql_where_clause]:
+            subprocess_list.append(extraitem)
+
+    for extraconfig in ["--config", "OGR_PG_ENABLE_METADATA", "NO"]: subprocess_list.append(extraconfig)
+
+    runSubprocess(subprocess_list)
+
+    LogMessage("Finished importing into PostGIS: " + downloaded_file)
+
+
 def runProcessingOnDownloads(output_folder):
     """
     Processes folder of GeoJSON and GPKG files
@@ -2900,6 +2989,7 @@ def runProcessingOnDownloads(output_folder):
     current_datasets = getStructureDatasets()
     downloaded_files = getFilesInFolder(output_folder)
 
+    queue_import = []
     for downloaded_file in downloaded_files:
 
         core_dataset_name = getCoreDatasetName(downloaded_file)
@@ -2921,65 +3011,17 @@ def runProcessingOnDownloads(output_folder):
         if postgisCheckTableExists(imported_table): postgisDropTable(imported_table)
         deleteAncestors(imported_table)
 
-        LogMessage("Importing into PostGIS: " + downloaded_file)
+        queue_import.append([downloaded_file, output_folder, imported_table, core_dataset_name])
+ 
+    LogMessage("************************************************")
+    LogMessage("********** STARTING MULTIPROCESSING ************")
+    LogMessage("************************************************")
 
-        downloaded_file_fullpath = output_folder + downloaded_file
+    with Pool(processes=getNumberProcesses()) as p: p.map(importDataset, queue_import)
 
-        sql_where_clause = None
-        orig_srs = 'EPSG:4326'
-
-        if '.geojson' in downloaded_file:
-
-            # Check GeoJSON for crs
-            # If missing and in Northern Ireland, then use EPSG:29903
-            # If missing and not in Northern Ireland, use EPSG:27700
-
-            json_data = json.load(open(downloaded_file_fullpath))
-
-            if 'crs' in json_data:
-                orig_srs = json_data['crs']['properties']['name'].replace('urn:ogc:def:crs:', '').replace('::', ':').replace('OGC:1.3:CRS84', 'EPSG:4326')
-            else:
-                # DataMapWales' GeoJSON use EPSG:27700 even though default SRS for GeoJSON is EPSG:4326
-                if 'wales' in downloaded_file: orig_srs = 'EPSG:27700'
-                # Improvement Service GeoJSON uses EPSG:27700
-                if 'local-nature-reserves--scotland' in downloaded_file: orig_srs = 'EPSG:27700'
-
-                # Tricky - Northern Ireland could be in correct GeoJSON without explicit crs (so EPSG:4326) or could be incorrect non-EPSG:4326 meters with non GB datum
-                if 'northern-ireland' in downloaded_file: orig_srs = 'EPSG:29903'
-                # ... so provide exceptions
-                if downloaded_file in ['world-heritage-sites--northern-ireland.geojson']: orig_srs = 'EPSG:4326'
-
-            # Historic England Conservation Areas includes 'no data' polygons so remove as too restrictive
-            if not DEBUG_RUN:
-                if downloaded_file == 'conservation-areas--england.geojson': sql_where_clause = "Name NOT LIKE 'No data%'"
-
-        # We set CRS=WORKING_CRS during download phase
-        if '.gpkg' in downloaded_file: orig_srs = WORKING_CRS
-
-        # Strange bug in ogr2ogr where sometimes fails on GeoJSON with sqlite
-        # Therefore avoid using sqlite unless absolutely necessary
-        # Don't specify geometry type yet in order to preserve lines and polygons
-        subprocess_list = [ "ogr2ogr", \
-                            "-f", "PostgreSQL", \
-                            'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
-                            downloaded_file_fullpath, \
-                            "-makevalid", \
-                            "-overwrite", \
-                            "-lco", "GEOMETRY_NAME=geom", \
-                            "-lco", "OVERWRITE=YES", \
-                            "-nln", imported_table, \
-                            "-nlt", "PROMOTE_TO_MULTI", \
-                            "-skipfailures", \
-                            "-s_srs", orig_srs, \
-                            "-t_srs", WORKING_CRS ]
-
-        if sql_where_clause is not None:
-            for extraitem in ["-dialect", "sqlite", "-sql", "SELECT * FROM '" + core_dataset_name + "' WHERE " + sql_where_clause]:
-                subprocess_list.append(extraitem)
-
-        for extraconfig in ["--config", "OGR_PG_ENABLE_METADATA", "NO"]: subprocess_list.append(extraconfig)
-
-        inputs = runSubprocess(subprocess_list)
+    LogMessage("************************************************")
+    LogMessage("*********** ENDING MULTIPROCESSING *************")
+    LogMessage("************************************************")
 
     LogMessage("All downloaded files imported into PostGIS")
 
