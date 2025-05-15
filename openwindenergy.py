@@ -1959,6 +1959,10 @@ def downloadDatasets(ckanurl, output_folder):
     Repeats download process until all files are valid
     """
 
+    global TEMP_FOLDER
+
+    makeFolder(TEMP_FOLDER)
+
     while True:
 
         all_downloaded = downloadDatasetsSinglePass(ckanurl, output_folder)
@@ -1966,6 +1970,8 @@ def downloadDatasets(ckanurl, output_folder):
         if checkGeoJSONFiles(output_folder) and all_downloaded: break
 
         LogMessage("One or more downloaded files invalid, rerunning download process")
+
+    if isdir(TEMP_FOLDER): shutil.rmtree(TEMP_FOLDER)
 
 def downloadDatasetsSinglePass(ckanurl, output_folder):
     """
@@ -2109,7 +2115,6 @@ def downloadDataset(dataset_parameters):
     dataset_title = reformatDatasetName(dataset['title'])
     feature_name = dataset['title']
     feature_layer_url = dataset['url']
-    makeFolder(TEMP_FOLDER)
     temp_base = join(TEMP_FOLDER, 'temp_' + str(dataset_index))
 
     opener = urllib.request.build_opener()

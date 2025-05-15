@@ -3753,7 +3753,7 @@ def createSamplingGridData(batch_values):
         batch_index, batch_grid_spacing, raster_resolution = batch_values[0], batch_values[1], batch_values[2]
 
     LogMessage("========================================")
-    LogMessage("Starting batch: " + str(batch_index) + " " + str(batch_grid_spacing))
+    LogMessage("Starting batch: " + str(batch_index))
     LogMessage("========================================")
 
     # ************************************************************
