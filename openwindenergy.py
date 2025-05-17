@@ -88,6 +88,7 @@ OPENWINDENERGY_VERSION              = "1.0"
 TEMP_FOLDER                         = "temp/"
 USE_MULTIPROCESSING                 = True
 if SERVER_BUILD: USE_MULTIPROCESSING = True
+if BUILD_FOLDER == "build-docker/": USE_MULTIPROCESSING = False
 DEFAULT_HEIGHT_TO_TIP               = 124.2     # Based on openwind's own manual data on all large (>=75 m to tip-height) failed and successful UK onshore wind projects
 DEFAULT_BLADE_RADIUS                = 47.8      # Based on openwind's own manual data on all large (>=75 m to tip-height) failed and successful UK onshore wind projects
 HEIGHT_TO_TIP                       = DEFAULT_HEIGHT_TO_TIP
@@ -162,7 +163,6 @@ OSM_NAME_CONVERT                    = \
 # so it's okay to cut up early datasets before this
 
 PROCESSING_GRID_SPACING             = 500 * 1000 # Size of grid squares in metres, ie. 500km
-# PROCESSING_GRID_SPACING             = 1000 * 1000 # Size of grid squares in metres, ie. 500km
 PROCESSING_GRID_TABLE               = 'uk__processing_grid_' + str(int(PROCESSING_GRID_SPACING)) + '_m'
 
 # Output grid is used to cut up final output into grid squares 
@@ -447,20 +447,77 @@ def osmDownloadData():
 
 def init_globals_boolean(global_bool):
     """
-    Used as flag across multiprocessing threads
+    Manages multiprocessing variables - boolean
     """
 
     global global_boolean
     global_boolean = global_bool
 
+def init_globals_count(global_cnt):
+    """
+    Manages multiprocessing variables - count
+    """
+
+    global global_count
+    global_count = global_cnt
+
 def init_globals_boolean_count(global_bool, global_cnt):
     """
-    Used as flag across multiprocessing threads
+    Manages multiprocessing variables - boolean and count
     """
 
     global global_boolean, global_count
     global_boolean = global_bool
     global_count = global_cnt
+
+def buildQueuePrefix(queue_id):
+    """
+    Builds queue prefix string for easier tracking in log files 
+    """
+
+    return "[QID:" + str(queue_id).zfill(4) + "] "
+
+def multiprocessDivideChunks(queue_dict, chunksize):
+    """
+    Splits list of queue items into separate chunks so key field, 
+    eg. file size, number records, is more evenly shared across chunks
+    This means separate processes can start with parallel largest problems first
+    """
+
+    queue_dict = dict(sorted(queue_dict.items(), reverse=True))
+    queue_datasets_largest_first = [queue_dict[item] for item in queue_dict]
+
+    queue_index, chunk_items = 0, {}
+    for chunk in range(chunksize):
+        for cpu in range(multiprocessing.cpu_count()):
+            if queue_index >= len(queue_datasets_largest_first): break
+            chunk_index = chunk + (cpu * chunksize)
+            chunk_items[chunk_index] = queue_datasets_largest_first[queue_index]
+            queue_index += 1
+        if queue_index >= len(queue_datasets_largest_first): break
+
+    chunk_dict = dict(sorted(chunk_items.items()))
+    queue_datasets = [chunk_dict[item] for item in chunk_dict]
+
+    return queue_datasets
+
+def multiprocessBefore():
+    """
+    Run code before multiprocessing is started
+    """
+
+    LogMessage("************************************************")
+    LogMessage("********** STARTING MULTIPROCESSING ************")
+    LogMessage("************************************************")
+
+def multiprocessAfter():
+    """
+    Run code after multiprocessing has finished
+    """
+
+    LogMessage("************************************************")
+    LogMessage("*********** ENDING MULTIPROCESSING *************")
+    LogMessage("************************************************")
 
 def singleprocessFileCopy(copy_parameters):
     """
@@ -478,15 +535,74 @@ def multiprocessFileCopy(queue_files):
     Copies files using multiprocessing to save time
     """
 
-    LogMessage("************************************************")
-    LogMessage("********** STARTING MULTIPROCESSING ************")
-    LogMessage("************************************************")
+    if len(queue_files) == 0: return
+        
+    multiprocessBefore()
 
-    with Pool(processes=getNumberProcesses()) as p: p.map(singleprocessFileCopy, queue_files)
+    chunksize = int(len(queue_files) / multiprocessing.cpu_count()) + 1
 
-    LogMessage("************************************************")
-    LogMessage("*********** ENDING MULTIPROCESSING *************")
-    LogMessage("************************************************")
+    with Pool(processes=getNumberProcesses()) as p: p.map(singleprocessFileCopy, queue_files, chunksize=chunksize)
+
+    multiprocessAfter()
+
+def singleprocessDownload(download_parameters):
+    """
+    Single process download using download_parameters
+    """
+
+    global DOWNLOAD_USER_AGENT
+
+    download_description, url, file_dst = download_parameters[0], download_parameters[1], download_parameters[2]
+
+    LogMessage(download_description)
+
+    opener = urllib.request.build_opener()
+    opener.addheaders = [('User-Agent', DOWNLOAD_USER_AGENT)]
+    urllib.request.install_opener(opener)
+    attemptDownloadUntilSuccess(url, file_dst)
+
+def multiprocessDownload(queue_download):
+    """
+    Downloads files using multiprocessing to save time
+    """
+
+    if len(queue_download) == 0: return
+
+    multiprocessBefore()
+
+    chunksize = int(len(queue_download) / multiprocessing.cpu_count()) + 1
+
+    with Pool(processes=getNumberProcesses()) as p: p.map(singleprocessDownload, queue_download, chunksize=chunksize)
+
+    multiprocessAfter()
+
+def singleprocessSubprocess(subprocess_parameters):
+    """
+    Single process subprocess using subprocess_parameters
+    """
+
+    output_text, subprocess_array = subprocess_parameters[0], subprocess_parameters[1]
+
+    LogMessage("STARTING: " + output_text)
+
+    runSubprocess(subprocess_array)
+
+    LogMessage("FINISHED: " + output_text)
+
+def multiprocessSubprocess(queue_subprocess):
+    """
+    Runs subprocess using multiprocessing to save time
+    """
+
+    if len(queue_subprocess) == 0: return
+
+    multiprocessBefore()
+
+    chunksize = int(len(queue_subprocess) / multiprocessing.cpu_count()) + 1
+
+    with Pool(processes=getNumberProcesses()) as p: p.map(singleprocessSubprocess, queue_subprocess, chunksize=chunksize)
+
+    multiprocessAfter()
 
 # ***********************************************************
 # ******************** PostGIS functions ********************
@@ -511,6 +627,25 @@ def postgisWaitRunning():
             time.sleep(5)
 
     LogMessage("Connection to PostGIS successful")
+
+def postgisGetAllTables():
+    """
+    Gets list of all tables
+    """
+
+    global POSTGRES_DB
+
+    all_tables = postgisGetResults(r"""
+    SELECT tables.table_name
+    FROM information_schema.tables
+    WHERE 
+    table_catalog=%s AND 
+    table_schema='public' AND 
+    table_type='BASE TABLE' AND
+    table_name NOT IN ('spatial_ref_sys')
+    ORDER BY table_name;
+    """, (POSTGRES_DB, ))
+    return [table[0] for table in all_tables]
 
 def postgisCheckTableExists(table_name):
     """
@@ -570,21 +705,13 @@ def postgisGetResults(sql_text, sql_parameters):
     conn.close()
     return results
 
-def postgisGetAllTables():
+def postgisGetNumberRecords(table_name):
     """
-    Gets list of all tables in database
+    Gets number of records in table
     """
 
-    return postgisGetResults(r"""
-    SELECT tables.table_name
-    FROM information_schema.tables
-    WHERE 
-    table_catalog=%s AND 
-    table_schema='public' AND 
-    table_type='BASE TABLE' AND
-    table_name NOT IN ('spatial_ref_sys')
-    ORDER BY table_name;
-    """, (POSTGRES_DB, ))
+    results = postgisGetResults("SELECT COUNT(*) FROM %s;", (AsIs(table_name), ))
+    return results[0][0]
 
 def postgisGetCustomTables():
     """
@@ -684,11 +811,15 @@ def postgisDropAllTables():
     Drops all tables in schema
     """
 
-    alltables = postgisGetAllTables()
+    global OSM_BOUNDARIES
 
-    for table in alltables:
-        table_name, = table
-        postgisDropTable(table_name)
+    # ignore_tables = [reformatTableName(OSM_BOUNDARIES)]
+    ignore_tables = []
+    all_tables = postgisGetAllTables()
+
+    for table in all_tables:
+        if table in ignore_tables: continue
+        postgisDropTable(table)
 
 def postgisDropCustomTables():
     """
@@ -740,25 +871,69 @@ def postgisDropAmalgamatedTables():
         table_name, = table
         postgisDropTable(table_name)
 
-def postgisAmalgamateAndDissolve(target_table, child_tables):
+def singleprocessAmalgamateAndDissolveGridSquareStep1(process_parameters):
+    """
+    Process single cell of grid square - to allow multiprocessing over multiple cells
+    """
+
+    target_table, grid_square_index, grid_square_count, grid_square_id, scratch_table_1, processing_grid, children_sql = \
+        process_parameters[0], process_parameters[1], process_parameters[2], process_parameters[3], process_parameters[4], process_parameters[5], process_parameters[6]
+
+    LogMessage("STARTING: " + target_table + ": Grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
+
+    postgisExec("""
+    INSERT INTO %s 
+        SELECT final.id, final.geom
+        FROM
+        (
+            SELECT 
+                grid.id, 
+                (ST_Dump(ST_Intersection(grid.geom, children.geom))).geom geom
+            FROM %s grid, (%s) AS children 
+            WHERE grid.id = %s
+        ) final WHERE ST_geometrytype(final.geom) = 'ST_Polygon';""", (AsIs(scratch_table_1), AsIs(processing_grid), AsIs(children_sql), AsIs(grid_square_id), ))
+
+    LogMessage("FINISHED: " + target_table + ": Grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
+
+def singleprocessAmalgamateAndDissolveGridSquareStep2(process_parameters):
+    """
+    Process single cell of grid square - to allow multiprocessing over multiple cells
+    """
+
+    target_table, grid_square_index, grid_square_count, grid_square_id, scratch_table_1, scratch_table_2 = \
+        process_parameters[0], process_parameters[1], process_parameters[2], process_parameters[3], process_parameters[4], process_parameters[5] 
+
+    LogMessage("STARTING: " + target_table + ": Processing grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
+
+    postgisExec("""
+    INSERT INTO %s 
+        SELECT final.geom
+        FROM
+        (SELECT (ST_Dump(ST_Union(geom))).geom geom FROM %s AS dataset WHERE id = %s) final 
+        WHERE ST_geometrytype(final.geom) = 'ST_Polygon';""", (AsIs(scratch_table_2), AsIs(scratch_table_1), AsIs(grid_square_id), ))
+
+    LogMessage("FINISHED: " + target_table + ": Processed grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
+
+def multiprocessAmalgamateAndDissolve(amalgamate_parameters):
     """
     Amalgamates and dissolves all child tables into target table 
+    Uses multiprocessing to process grid squares to save time
     """
 
-    global PROCESSING_GRID_TABLE
+    amalgamate_id, amalgamate_output, target_table, child_tables, processing_grid_table = amalgamate_parameters[0], amalgamate_parameters[1], amalgamate_parameters[2], amalgamate_parameters[3], amalgamate_parameters[4]
 
-    processing_grid = reformatTableName(PROCESSING_GRID_TABLE)
+    LogMessage(amalgamate_output)
+
+    amalgamate_id = str(amalgamate_id).zfill(4)
+
+    processing_grid = reformatTableName(processing_grid_table)
     grid_square_ids = postgisGetResults("SELECT id FROM %s;", (AsIs(processing_grid), ))
     grid_square_ids = [item[0] for item in grid_square_ids]
     grid_square_count = len(grid_square_ids)
 
-    # Delete any tables and files that are derived from this table
-
-    deleteDatasetAndAncestors(target_table)
-
-    scratch_table_1 = '_scratch_table_1'
-    scratch_table_2 = '_scratch_table_2'
-    scratch_table_3 = '_scratch_table_3'
+    scratch_table_1 = '_scratch_table_1_' + amalgamate_id
+    scratch_table_2 = '_scratch_table_2_' + amalgamate_id
+    scratch_table_3 = '_scratch_table_3_' + amalgamate_id
 
     # We run process on all children - even if only one child - as process runs
     # ST_Union (dissolve) on datasets for first time to eliminate overlapping polygons
@@ -771,9 +946,111 @@ def postgisAmalgamateAndDissolve(target_table, child_tables):
     if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
     if postgisCheckTableExists(scratch_table_3): postgisDropTable(scratch_table_3)
 
-    LogMessage("Starting amalgamation and dissolving for: " + target_table)
+    LogMessage("STARTING: Amalgamation and dissolving for: " + target_table)
 
-    LogMessage(" --> Step 1: Amalgamate and dump all tables")
+    LogMessage(target_table + ": Amalgamate and dump all tables")
+
+    if all_tables_have_id:
+        children_sql = " UNION ".join(['SELECT id, geom FROM ' + table_name for table_name in child_tables])
+        postgisExec("CREATE TABLE %s AS SELECT children.id, (ST_Dump(children.geom)).geom geom FROM (%s) AS children;", \
+                    (AsIs(scratch_table_1), AsIs(children_sql), ))
+    else:
+        children_sql = " UNION ".join(['SELECT geom FROM ' + table_name for table_name in child_tables])
+
+        postgisExec("CREATE TABLE %s (id INTEGER, geom GEOMETRY(Polygon, 4326));", (AsIs(scratch_table_1), ))
+
+        grid_process_queue = []
+        for grid_square_index in range(len(grid_square_ids)):
+            grid_square_id = grid_square_ids[grid_square_index]
+            grid_process_queue.append([target_table, grid_square_index, grid_square_count, grid_square_id, scratch_table_1, processing_grid, children_sql])
+
+        if len(grid_process_queue) != 0:
+
+            chunksize = int(len(grid_process_queue) / multiprocessing.cpu_count()) + 1
+
+            multiprocessBefore()
+
+            with Pool(processes=getNumberProcesses()) as p: p.map(singleprocessAmalgamateAndDissolveGridSquareStep1, grid_process_queue, chunksize=chunksize)
+
+            multiprocessAfter()
+
+        postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_1 + "_idx"), AsIs(scratch_table_1), ))
+
+    postgisExec("CREATE INDEX %s ON %s(id);", (AsIs(scratch_table_1 + 'id_idx'), AsIs(scratch_table_1), ))
+
+    LogMessage(target_table + ": Dissolve all geometries for each processing grid square")
+
+    postgisExec("CREATE TABLE %s (geom GEOMETRY(Polygon, 4326));", (AsIs(scratch_table_2), ))
+
+    grid_process_queue = []
+    for grid_square_index in range(len(grid_square_ids)):
+        grid_square_id = grid_square_ids[grid_square_index]
+        grid_process_queue.append([target_table, grid_square_index, grid_square_count, grid_square_id, scratch_table_1, scratch_table_2])
+
+    if len(grid_process_queue) != 0:
+
+        chunksize = int(len(grid_process_queue) / multiprocessing.cpu_count()) + 1
+
+        multiprocessBefore()
+
+        with Pool(processes=getNumberProcesses()) as p: p.map(singleprocessAmalgamateAndDissolveGridSquareStep2, grid_process_queue, chunksize=chunksize)
+
+        multiprocessAfter()
+
+    postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_2 + "_idx"), AsIs(scratch_table_2), ))
+
+    LogMessage(target_table + ": Dissolve all geometries across all processing grid squares")
+
+    postgisExec("CREATE TABLE %s AS SELECT ST_Union(geom) geom FROM %s;", \
+                (AsIs(scratch_table_3), AsIs(scratch_table_2), ))
+
+    LogMessage(target_table + ": Save dumped geometries")
+    postgisExec("CREATE TABLE %s AS SELECT (ST_Dump(geom)).geom geom FROM %s;", \
+                (AsIs(target_table), AsIs(scratch_table_3), ))
+
+    postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(target_table + "_idx"), AsIs(target_table), ))
+
+    LogMessage("FINISHED: Created amalgamated and dissolved table: " + target_table)
+
+    if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+    if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
+    if postgisCheckTableExists(scratch_table_3): postgisDropTable(scratch_table_3)
+
+def postgisAmalgamateAndDissolve(amalgamate_parameters):
+    """
+    Amalgamates and dissolves all child tables into target table 
+    """
+
+    global CUSTOM_CONFIGURATION, PROCESSING_GRID_TABLE
+
+    amalgamate_id, amalgamate_output, target_table, child_tables, PROCESSING_GRID_TABLE, CUSTOM_CONFIGURATION = \
+        amalgamate_parameters[0], amalgamate_parameters[1], amalgamate_parameters[2], amalgamate_parameters[3], amalgamate_parameters[4], amalgamate_parameters[5]
+
+    amalgamate_id = str(amalgamate_id).zfill(4)
+    prefix = buildQueuePrefix(amalgamate_id)
+    processing_grid = reformatTableName(PROCESSING_GRID_TABLE)
+    grid_square_ids = postgisGetResults("SELECT id FROM %s;", (AsIs(processing_grid), ))
+    grid_square_ids = [item[0] for item in grid_square_ids]
+    grid_square_count = len(grid_square_ids)
+
+    scratch_table_1 = '_scratch_table_1_' + amalgamate_id
+    scratch_table_2 = '_scratch_table_2_' + amalgamate_id
+    scratch_table_3 = '_scratch_table_3_' + amalgamate_id
+
+    # We run process on all children - even if only one child - as process runs
+    # ST_Union (dissolve) on datasets for first time to eliminate overlapping polygons
+
+    all_tables_have_id = True
+    for table_name in child_tables:
+        if not postgisCheckColumnExists(table_name, 'id'): all_tables_have_id = False
+
+    if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+    if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
+    if postgisCheckTableExists(scratch_table_3): postgisDropTable(scratch_table_3)
+
+    LogMessage(prefix + "STARTING: Amalgamation and dissolving for: " + target_table)
+
+    LogMessage(prefix + target_table + ": Amalgamate and dump all tables")
 
     if all_tables_have_id:
         children_sql = " UNION ".join(['SELECT id, geom FROM ' + table_name for table_name in child_tables])
@@ -787,7 +1064,7 @@ def postgisAmalgamateAndDissolve(target_table, child_tables):
         for grid_square_index in range(len(grid_square_ids)):
             grid_square_id = grid_square_ids[grid_square_index]
 
-            LogMessage(" ----------> Processing grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
+            LogMessage(prefix + target_table + " Generating grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
 
             postgisExec("""
             INSERT INTO %s 
@@ -803,19 +1080,16 @@ def postgisAmalgamateAndDissolve(target_table, child_tables):
 
         postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_1 + "_idx"), AsIs(scratch_table_1), ))
 
-        # postgisExec("CREATE TABLE %s AS SELECT 0 as id, (ST_Dump(children.geom)).geom geom FROM (%s) AS children;", \
-        #             (AsIs(scratch_table_1), AsIs(children_sql), ))
-
     postgisExec("CREATE INDEX %s ON %s(id);", (AsIs(scratch_table_1 + 'id_idx'), AsIs(scratch_table_1), ))
 
-    LogMessage(" --> Step 2: Dissolve all geometries for each processing grid square")
+    LogMessage(prefix + target_table + ": Dissolve all geometries for each processing grid square")
 
     postgisExec("CREATE TABLE %s (geom GEOMETRY(Polygon, 4326));", (AsIs(scratch_table_2), ))
 
     for grid_square_index in range(len(grid_square_ids)):
         grid_square_id = grid_square_ids[grid_square_index]
 
-        LogMessage(" ----------> Processing grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
+        LogMessage(prefix + target_table + ": Dissolving grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
 
         postgisExec("""
         INSERT INTO %s 
@@ -824,24 +1098,22 @@ def postgisAmalgamateAndDissolve(target_table, child_tables):
             (SELECT (ST_Dump(ST_Union(geom))).geom geom FROM %s AS dataset WHERE id = %s) final 
             WHERE ST_geometrytype(final.geom) = 'ST_Polygon';""", (AsIs(scratch_table_2), AsIs(scratch_table_1), AsIs(grid_square_id), ))
 
-    # postgisExec("CREATE TABLE %s AS SELECT id, ST_Union(geom) geom FROM %s GROUP BY id;", \
-    #             (AsIs(scratch_table_2), AsIs(scratch_table_1), ))
-
     postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_2 + "_idx"), AsIs(scratch_table_2), ))
 
-    LogMessage(" --> Step 3: Dissolve all geometries across all processing grid squares")
+    LogMessage(prefix + target_table + ": Dissolve all geometries across all processing grid squares")
 
     postgisExec("CREATE TABLE %s AS SELECT ST_Union(geom) geom FROM %s;", \
                 (AsIs(scratch_table_3), AsIs(scratch_table_2), ))
 
-    LogMessage(" --> Step 4: Save dumped geometries")
+    LogMessage(prefix + target_table + ": Save dumped geometries")
     postgisExec("CREATE TABLE %s AS SELECT (ST_Dump(geom)).geom geom FROM %s;", \
                 (AsIs(target_table), AsIs(scratch_table_3), ))
 
     postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(target_table + "_idx"), AsIs(target_table), ))
 
-    LogMessage(" --> COMPLETED: Created amalgamated and dissolved table: " + target_table)
-    LogMessage("------------------------------------------------------------")
+    with global_count.get_lock(): 
+        global_count.value -= 1
+        LogMessage(prefix + "FINISHED: Created amalgamated and dissolved table: " + target_table + " [" + str(global_count.value) + " datasets to be processed]")
 
     if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
     if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
@@ -1299,7 +1571,7 @@ def deleteDatasetFiles(dataset):
                 LogMessage(" --> Deleting: " + possible_file)
                 os.remove(possible_file)
 
-def deleteDatasetTables(dataset):
+def deleteDatasetTables(dataset, all_tables):
     """
     Deletes all tables specifically relating to dataset
     """
@@ -1316,17 +1588,25 @@ def deleteDatasetTables(dataset):
         possible_tables.append(bufferedTable)
         possible_tables.append(buildProcessedTableName(bufferedTable))
 
+    # We update internal array of all_tables to minimise load on PostGIS
+    output_all_tables = []
     for possible_table in possible_tables:
-        if postgisCheckTableExists(possible_table):
+        if possible_table in all_tables:
             LogMessage(" --> Dropping PostGIS table: " + possible_table)
             postgisDropTable(possible_table)
+        else:
+            output_all_tables.append(possible_table)
 
-def deleteAncestors(dataset):
+    return output_all_tables
+
+def deleteAncestors(dataset, all_tables=None):
     """
     Deletes parent/ancestor files and parent/ancestor tables derived from dataset
     """
 
     dataset = dataset.split('.')[0]
+
+    if all_tables is None: all_tables = postgisGetAllTables()
 
     LogMessage("Deleting files and tables derived from: " + dataset)
 
@@ -1336,15 +1616,19 @@ def deleteAncestors(dataset):
 
     for ancestor in ancestors:
         deleteDatasetFiles(ancestor)
-        deleteDatasetTables(ancestor)
+        all_tables = deleteDatasetTables(ancestor, all_tables)
 
-def deleteDatasetAndAncestors(dataset):
+    return all_tables
+
+def deleteDatasetAndAncestors(dataset, all_tables=None):
     """
     Deletes specific dataset by deleting all files and tables specifically associated 
     with dataset and all parent/ancestor files and parent/ancestor tables derived from dataset
     """
 
     dataset = dataset.split('.')[0]
+
+    if all_tables is None: all_tables = postgisGetAllTables()
 
     LogMessage("Deleting files and tables derived from: " + dataset)
 
@@ -1354,7 +1638,7 @@ def deleteDatasetAndAncestors(dataset):
 
     for ancestor in ancestors:
         deleteDatasetFiles(ancestor)
-        deleteDatasetTables(ancestor)
+        deleteDatasetTables(ancestor, all_tables)
 
 def isSpecificDatasetHeightDependent(dataset_name):
     """
@@ -1933,20 +2217,16 @@ def checkGeoJSONFiles(output_folder):
         file_path = output_folder + file
         files_to_check.append(file_path)
 
-    number_processes = getNumberProcesses()
     global_boolean = Value('i', 1)
 
-    LogMessage("************************************************")
-    LogMessage("********** STARTING MULTIPROCESSING ************")
-    LogMessage("************************************************")
+    multiprocessBefore()
 
-    # Run multiprocessing pool
-    with Pool(processes=number_processes, initializer=init_globals_boolean, initargs=(global_boolean,)) as p:
-        p.map(checkGeoJSONFile, files_to_check)
+    chunksize = int(len(files_to_check) / multiprocessing.cpu_count()) + 1
 
-    LogMessage("************************************************")
-    LogMessage("*********** ENDING MULTIPROCESSING *************")
-    LogMessage("************************************************")
+    with Pool(processes=getNumberProcesses(), initializer=init_globals_boolean, initargs=(global_boolean,)) as p:
+        p.map(checkGeoJSONFile, files_to_check, chunksize=chunksize)
+
+    multiprocessAfter()
 
     all_valid = (bool)(global_boolean.value)
 
@@ -2009,40 +2289,42 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
     existing_yaml_content = None
     rerun_osm_export_tool = False
 
+    # Build list of YML files to download, download using multiprocessing then process all downloads
+
+    queue_download, dataset_titles = [], []
     for ckanpackage in ckanpackages.keys():
         for dataset in ckanpackages[ckanpackage]['datasets']:
             if dataset['type'] != 'osm-export-tool YML': continue
 
             dataset_title = reformatDatasetName(dataset['title'])
-            feature_name = dataset['title']
-            feature_layer_url = dataset['url']
+            dataset_titles.append(dataset_title)
             url_basename = basename(dataset['url'])
             downloaded_yml = dataset_title + ".yml"
             downloaded_yml_fullpath = OSM_CONFIG_FOLDER + downloaded_yml
+            queue_download.append(["Downloading osm-export-tool YML: " + url_basename + " -> " + downloaded_yml, dataset['url'], downloaded_yml_fullpath])
 
-            LogMessage("Downloading osm-export-tool YML: " + url_basename + " -> " + downloaded_yml)
+    multiprocessDownload(queue_download)
 
-            opener = urllib.request.build_opener()
-            opener.addheaders = [('User-Agent', 'Mozilla/5.0')]
-            urllib.request.install_opener(opener)
-            attemptDownloadUntilSuccess(dataset['url'], downloaded_yml_fullpath)
+    for dataset_title in dataset_titles:
+        yaml_content = None
+        downloaded_yml = dataset_title + ".yml"
+        downloaded_yml_fullpath = OSM_CONFIG_FOLDER + downloaded_yml
+        
+        with open(downloaded_yml_fullpath) as stream:
+            try:
+                yaml_content = yaml.safe_load(stream)
+            except yaml.YAMLError as exc:
+                LogMessage(exc)
+                exit()
 
-            yaml_content = None
-            with open(downloaded_yml_fullpath) as stream:
-                try:
-                    yaml_content = yaml.safe_load(stream)
-                except yaml.YAMLError as exc:
-                    LogMessage(exc)
-                    exit()
+        if yaml_content is None: continue
+        yaml_content_keys = list(yaml_content.keys())
+        if len(yaml_content_keys) == 0: continue
 
-            if yaml_content is None: continue
-            yaml_content_keys = list(yaml_content.keys())
-            if len(yaml_content_keys) == 0: continue
-
-            # Rename yaml layer with dataset_title and add to aggregate yaml data structure
-            yaml_content_firstkey = yaml_content_keys[0]
-            yaml_all_content[dataset_title] = yaml_content[yaml_content_firstkey]
-            osm_layers.append(dataset_title)
+        # Rename yaml layer with dataset_title and add to aggregate yaml data structure
+        yaml_content_firstkey = yaml_content_keys[0]
+        yaml_all_content[dataset_title] = yaml_content[yaml_content_firstkey]
+        osm_layers.append(dataset_title)
 
     # Check whether latest yaml matches existing aggregated yaml (if exists)
     # If not, dump out aggregate yaml data structure and process with osm-export-tool
@@ -2080,26 +2362,20 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
             dataset_index += 1
             datasets_queue.append([dataset_index, dataset, output_folder])
 
-    number_processes = getNumberProcesses()
-
-
-    LogMessage("************************************************")
-    LogMessage("********** STARTING MULTIPROCESSING ************")
-    LogMessage("************************************************")
+    multiprocessBefore()
 
     LogMessage("Downloading missing datasets...")
 
-    # Run multiprocessing pool
-    with Pool(processes=number_processes, initializer=init_globals_boolean_count, initargs=(all_datasets_downloaded, num_datasets_downloaded, )) as p:
-        p.map(downloadDataset, datasets_queue)
+    chunksize = int(len(datasets_queue) / multiprocessing.cpu_count()) + 1
+
+    with Pool(processes=getNumberProcesses(), initializer=init_globals_boolean_count, initargs=(all_datasets_downloaded, num_datasets_downloaded, )) as p:
+        p.map(downloadDataset, datasets_queue, chunksize=chunksize)
     
     num_downloaded = num_datasets_downloaded.value
     if num_downloaded == 0: LogMessage("All datasets already downloaded")
     else: LogMessage(str(num_downloaded) + " dataset(s) downloaded in this pass")
 
-    LogMessage("************************************************")
-    LogMessage("*********** ENDING MULTIPROCESSING *************")
-    LogMessage("************************************************")
+    multiprocessAfter()
 
     return (bool)(all_datasets_downloaded.value)
 
@@ -2722,7 +2998,7 @@ def importDataset(dataset_parameters):
 
     downloaded_file, output_folder, imported_table, core_dataset_name = dataset_parameters[0], dataset_parameters[1], dataset_parameters[2], dataset_parameters[3]
 
-    LogMessage("Started importing into PostGIS:  " + downloaded_file)
+    LogMessage("STARTING: Importing into PostGIS: " + downloaded_file)
 
     downloaded_file_fullpath = output_folder + downloaded_file
 
@@ -2751,8 +3027,7 @@ def importDataset(dataset_parameters):
             if downloaded_file in ['world-heritage-sites--northern-ireland.geojson']: orig_srs = 'EPSG:4326'
 
         # Historic England Conservation Areas includes 'no data' polygons so remove as too restrictive
-        if not DEBUG_RUN:
-            if downloaded_file == 'conservation-areas--england.geojson': sql_where_clause = "Name NOT LIKE 'No data%'"
+        if downloaded_file == 'conservation-areas--england.geojson': sql_where_clause = "Name NOT LIKE 'No data%'"
 
     # We set CRS=WORKING_CRS during download phase
     if downloaded_file.endswith('.gpkg'): orig_srs = WORKING_CRS
@@ -2783,8 +3058,139 @@ def importDataset(dataset_parameters):
 
     runSubprocess(subprocess_list)
 
-    LogMessage("Finished importing into PostGIS: " + downloaded_file)
+    LogMessage("FINISHED: Importing into PostGIS: " + downloaded_file)
 
+def processDataset(dataset_parameters):
+    """
+    Process dataset
+    """
+
+    global PROCESSING_GRID_TABLE, HEIGHT_TO_TIP, BLADE_RADIUS, CUSTOM_CONFIGURATION
+
+    dataset_id, dataset_name, clipping_union_table, REGENERATE_OUTPUT, HEIGHT_TO_TIP, BLADE_RADIUS, CUSTOM_CONFIGURATION = \
+        dataset_parameters[0], dataset_parameters[1], dataset_parameters[2], dataset_parameters[3], dataset_parameters[4], dataset_parameters[5], dataset_parameters[6]
+
+    dataset_id = str(dataset_id).zfill(4)
+    prefix = buildQueuePrefix(dataset_id)
+
+    scratch_table_1 = '_scratch_table_1_' + dataset_id
+    scratch_table_2 = '_scratch_table_2_' + dataset_id
+    scratch_table_3 = '_scratch_table_3_' + dataset_id
+
+    if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+    if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
+    if postgisCheckTableExists(scratch_table_3): postgisDropTable(scratch_table_3)
+
+    processing_grid = reformatTableName(PROCESSING_GRID_TABLE)
+    grid_square_ids = postgisGetResults("SELECT id FROM %s;", (AsIs(processing_grid), ))
+    grid_square_ids = [item[0] for item in grid_square_ids]
+    grid_square_count = len(grid_square_ids)
+
+    buffer = getDatasetBuffer(dataset_name)
+    source_table = reformatTableName(dataset_name)
+    processed_table = buildProcessedTableName(source_table)
+
+    with global_count.get_lock(): 
+        LogMessage(prefix + "STARTING: Processing: " + source_table + " [" + str(global_count.value) + " datasets to be processed]")
+
+    if buffer is not None:
+        buffered_table = buildBufferTableName(dataset_name, buffer)
+        processed_table = buildProcessedTableName(buffered_table)
+        table_exists = postgisCheckTableExists(buffered_table)
+        if REGENERATE_OUTPUT or (not table_exists):
+            LogMessage(prefix + "Adding " + buffer + "m buffer: " + source_table + " -> " + buffered_table)
+            if table_exists: postgisDropTable(buffered_table)
+
+            # Make special exception for hedgerow as hedgerow polygons represent boundaries that should be buffered as lines
+            buffer_polygons_as_lines = False
+            if 'hedgerow' in buffered_table: buffer_polygons_as_lines = True
+
+            if buffer_polygons_as_lines:
+                postgisExec("""
+                CREATE TABLE %s AS 
+                (
+                    (SELECT ST_Buffer(geom::geography, %s)::geometry geom FROM %s WHERE ST_geometrytype(geom) = 'ST_LineString') UNION 
+                    (SELECT ST_Buffer(ST_Boundary(geom)::geography, %s)::geometry geom FROM %s WHERE ST_geometrytype(geom) IN ('ST_Polygon', 'ST_MultiPolygon'))
+                );""", \
+                    (AsIs(buffered_table), float(buffer), AsIs(source_table), float(buffer), AsIs(source_table), ))
+            else:
+                postgisExec("CREATE TABLE %s AS SELECT ST_Buffer(geom::geography, %s)::geometry geom FROM %s;", \
+                            (AsIs(buffered_table), float(buffer), AsIs(source_table), ))
+            postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(buffered_table + "_idx"), AsIs(buffered_table), ))
+        source_table = buffered_table
+
+    # Dump original or buffered layer and run processing on it
+
+    processed_table_exists = postgisCheckTableExists(processed_table)
+    if REGENERATE_OUTPUT or (not processed_table_exists):
+        if processed_table_exists: postgisDropTable(processed_table)
+
+        # Explode geometries with ST_Dump to remove MultiPolygon,
+        # MultiSurface, etc and homogenize processing
+        # Ideally all dumped tables should contain polygons only (either source or buffered source is (Multi)Polygon)
+        # so filter on ST_Polygon
+
+        LogMessage(prefix + source_table + ": Select only polygons, dump and make valid")
+
+        postgisExec("CREATE TABLE %s AS SELECT ST_MakeValid(dumped.geom) geom FROM (SELECT (ST_Dump(geom)).geom geom FROM %s) dumped WHERE ST_geometrytype(dumped.geom) = 'ST_Polygon';", \
+                    (AsIs(scratch_table_1), AsIs(source_table), ))
+
+        postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_1 + "_idx"), AsIs(scratch_table_1), ))
+
+        LogMessage(prefix + source_table + ": Clipping partially overlapping polygons")
+
+        postgisExec("""
+        CREATE TABLE %s AS 
+            SELECT ST_Intersection(clipping.geom, data.geom) geom
+            FROM %s data, %s clipping 
+            WHERE 
+                (NOT ST_Contains(clipping.geom, data.geom) AND 
+                ST_Intersects(clipping.geom, data.geom));""", \
+            (AsIs(scratch_table_2), AsIs(scratch_table_1), AsIs(clipping_union_table), ))
+
+        LogMessage(prefix + source_table + ": Adding fully enclosed polygons")
+
+        postgisExec("""
+        INSERT INTO %s  
+            SELECT data.geom  
+            FROM %s data, %s clipping 
+            WHERE 
+                ST_Contains(clipping.geom, data.geom);""", \
+            (AsIs(scratch_table_2), AsIs(scratch_table_1), AsIs(clipping_union_table), ))
+
+        LogMessage(prefix + source_table + ": Dumping geometries")
+
+        postgisExec("CREATE TABLE %s AS SELECT (ST_Dump(geom)).geom geom FROM %s;", (AsIs(scratch_table_3), AsIs(scratch_table_2), ))
+        postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_3 + "_idx"), AsIs(scratch_table_3), ))
+
+        LogMessage(prefix + source_table + ": Dissolving dataset")
+
+        if postgisCheckTableExists(processed_table): postgisDropTable(processed_table)
+        postgisExec("CREATE TABLE %s (id INTEGER, geom GEOMETRY(Polygon, 4326));", (AsIs(processed_table), ))
+        postgisExec("CREATE INDEX %s ON %s(id);", (AsIs(processed_table + 'id_idx'), AsIs(processed_table), ))
+
+        for grid_square_index in range(len(grid_square_ids)):
+            grid_square_id = grid_square_ids[grid_square_index]
+
+            LogMessage(prefix + source_table + ": Processing grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
+
+            postgisExec("""
+            INSERT INTO %s 
+                SELECT 
+                    grid.id, 
+                    (ST_Dump(ST_Union(ST_Intersection(grid.geom, dataset.geom)))).geom geom 
+                FROM %s grid, %s dataset 
+                WHERE grid.id = %s AND ST_geometrytype(dataset.geom) = 'ST_Polygon' GROUP BY grid.id""", (AsIs(processed_table), AsIs(processing_grid), AsIs(scratch_table_3), AsIs(grid_square_id), ))
+
+        postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(processed_table + "_idx"), AsIs(processed_table), ))
+
+        if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
+        if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
+        if postgisCheckTableExists(scratch_table_3): postgisDropTable(scratch_table_3)
+
+    with global_count.get_lock(): 
+        global_count.value -= 1
+        LogMessage(prefix + "FINISHED: Processed table: " + processed_table + " [" + str(global_count.value) + " datasets to be processed]")
 
 def runProcessingOnDownloads(output_folder):
     """
@@ -2833,6 +3239,7 @@ def runProcessingOnDownloads(output_folder):
     osm_export_file = BUILD_FOLDER + custom_prefix + OSM_EXPORT_DATA + '.gpkg'
     osm_export_projection = getGPKGProjection(osm_export_file)
 
+    queue_subprocess = []
     for osm_layer in osm_layers:
 
         # reformatTableName will add CUSTOM_CONFIGURATION_TABLE_PREFIX to table name if using custom configuration file
@@ -2844,8 +3251,6 @@ def runProcessingOnDownloads(output_folder):
         if postgisCheckTableExists(table_name): postgisDropTable(table_name)
 
         deleteAncestors(table_name)
-
-        LogMessage("Importing " + custom_prefix + OSM_EXPORT_DATA + ".gpkg OSM layer into PostGIS: " + osm_layer)
 
         # Assume 'osm-export-tool' outputs in EPSG:4326 projection
         import_array = ["ogr2ogr", \
@@ -2861,9 +3266,12 @@ def runProcessingOnDownloads(output_folder):
                         "SELECT * FROM '" + osm_layer + "'", \
                         "-s_srs", osm_export_projection, \
                         "-t_srs", WORKING_CRS, \
-                        "--config", "OGR_PG_ENABLE_METADATA", "NO"]
+                        "--config", "OGR_PG_ENABLE_METADATA", "NO", \
+                        "--config", "PG_USE_COPY", "YES" ]
 
-        runSubprocess(import_array)
+        queue_subprocess.append(["Importing " + custom_prefix + OSM_EXPORT_DATA + ".gpkg OSM layer into PostGIS: " + osm_layer, import_array])
+
+    multiprocessSubprocess(queue_subprocess)
 
     LogMessage("Finished processing all OSM-specific data layers")
 
@@ -2993,16 +3401,18 @@ def runProcessingOnDownloads(output_folder):
 
     current_datasets = getStructureDatasets()
     downloaded_files = getFilesInFolder(output_folder)
-
-    queue_import = []
+    all_tables = postgisGetAllTables()
+    
+    queue_index, queue_dict, queue_import = 1, {}, []
     for downloaded_file in downloaded_files:
+        queue_index += 1
 
         core_dataset_name = getCoreDatasetName(downloaded_file)
 
         # reformatTableName will add CUSTOM_CONFIGURATION_TABLE_PREFIX to table name if using custom configuration file
 
         imported_table = reformatTableName(core_dataset_name)
-        tableexists = postgisCheckTableExists(imported_table)
+        tableexists = (imported_table in all_tables)
 
         if (not REGENERATE_INPUT) and tableexists: continue
 
@@ -3013,20 +3423,23 @@ def runProcessingOnDownloads(output_folder):
             if core_dataset_name not in current_datasets: continue
 
         # If importing dataset, delete import table and all derived files and tables as data may have changed
-        if postgisCheckTableExists(imported_table): postgisDropTable(imported_table)
-        deleteAncestors(imported_table)
+        if tableexists: postgisDropTable(imported_table)
+        all_tables = deleteAncestors(imported_table, all_tables)
 
+        queue_dict_index = float(str(os.path.getsize(join(output_folder, downloaded_file))) + "." + str(queue_index))
+        queue_dict[queue_dict_index] = [downloaded_file, output_folder, imported_table, core_dataset_name]
         queue_import.append([downloaded_file, output_folder, imported_table, core_dataset_name])
- 
-    LogMessage("************************************************")
-    LogMessage("********** STARTING MULTIPROCESSING ************")
-    LogMessage("************************************************")
 
-    with Pool(processes=getNumberProcesses()) as p: p.map(importDataset, queue_import)
+    if len(queue_import) != 0:
 
-    LogMessage("************************************************")
-    LogMessage("*********** ENDING MULTIPROCESSING *************")
-    LogMessage("************************************************")
+        multiprocessBefore()
+
+        chunksize = int(len(queue_import) / multiprocessing.cpu_count()) + 1
+        queue_import = multiprocessDivideChunks(queue_dict, chunksize)
+
+        with Pool(processes=getNumberProcesses()) as p: p.map(importDataset, queue_import, chunksize=chunksize)
+
+        multiprocessAfter()
 
     LogMessage("All downloaded files imported into PostGIS")
 
@@ -3039,119 +3452,39 @@ def runProcessingOnDownloads(output_folder):
     groups = structure_lookup.keys()
     parents_lookup = {}
 
+    queue_index, queue_dict = 0, {}
     for group in groups:
         for parent in structure_lookup[group].keys():
             for dataset_name in structure_lookup[group][parent]:
+                queue_index += 1
                 buffer = getDatasetBuffer(dataset_name)
+                orig_table = reformatTableName(dataset_name)
                 source_table = reformatTableName(dataset_name)
                 processed_table = buildProcessedTableName(source_table)
                 if buffer is not None:
                     buffered_table = buildBufferTableName(dataset_name, buffer)
                     processed_table = buildProcessedTableName(buffered_table)
-                    table_exists = postgisCheckTableExists(buffered_table)
-                    if REGENERATE_OUTPUT or (not table_exists):
-                        LogMessage("Adding " + buffer + "m buffer: " + source_table + " -> " + buffered_table)
-                        if table_exists: postgisDropTable(buffered_table)
-
-                        # Make special exception for hedgerow as hedgerow polygons represent boundaries that should be buffered as lines
-                        buffer_polygons_as_lines = False
-                        if 'hedgerow' in buffered_table: buffer_polygons_as_lines = True
-
-                        if buffer_polygons_as_lines:
-                            postgisExec("""
-                            CREATE TABLE %s AS 
-                            (
-                                (SELECT ST_Buffer(geom::geography, %s)::geometry geom FROM %s WHERE ST_geometrytype(geom) = 'ST_LineString') UNION 
-                                (SELECT ST_Buffer(ST_Boundary(geom)::geography, %s)::geometry geom FROM %s WHERE ST_geometrytype(geom) IN ('ST_Polygon', 'ST_MultiPolygon'))
-                            );""", \
-                                (AsIs(buffered_table), float(buffer), AsIs(source_table), float(buffer), AsIs(source_table), ))
-                        else:
-                            postgisExec("CREATE TABLE %s AS SELECT ST_Buffer(geom::geography, %s)::geometry geom FROM %s;", \
-                                        (AsIs(buffered_table), float(buffer), AsIs(source_table), ))
-                        postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(buffered_table + "_idx"), AsIs(buffered_table), ))
                     source_table = buffered_table
-
-                # Dump original or buffered layer and run processing on it
-
-                processed_table_exists = postgisCheckTableExists(processed_table)
-                if REGENERATE_OUTPUT or (not processed_table_exists):
-                    LogMessage("Processing table: " + source_table)
-
-                    if processed_table_exists: postgisDropTable(processed_table)
-
-                    # Explode geometries with ST_Dump to remove MultiPolygon,
-                    # MultiSurface, etc and homogenize processing
-                    # Ideally all dumped tables should contain polygons only (either source or buffered source is (Multi)Polygon)
-                    # so filter on ST_Polygon
-
-                    if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
-                    if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
-                    if postgisCheckTableExists(scratch_table_3): postgisDropTable(scratch_table_3)
-
-                    LogMessage(" --> Step 1: Select only polygons, dump and make valid")
-
-                    postgisExec("CREATE TABLE %s AS SELECT ST_MakeValid(dumped.geom) geom FROM (SELECT (ST_Dump(geom)).geom geom FROM %s) dumped WHERE ST_geometrytype(dumped.geom) = 'ST_Polygon';", \
-                                (AsIs(scratch_table_1), AsIs(source_table), ))
-
-                    postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_1 + "_idx"), AsIs(scratch_table_1), ))
-
-                    LogMessage(" --> Step 2: Clipping partially overlapping polygons")
-
-                    postgisExec("""
-                    CREATE TABLE %s AS 
-                        SELECT ST_Intersection(clipping.geom, data.geom) geom
-                        FROM %s data, %s clipping 
-                        WHERE 
-                            (NOT ST_Contains(clipping.geom, data.geom) AND 
-                            ST_Intersects(clipping.geom, data.geom));""", \
-                        (AsIs(scratch_table_2), AsIs(scratch_table_1), AsIs(clipping_union_table), ))
-
-                    LogMessage(" --> Step 3: Adding fully enclosed polygons")
-
-                    postgisExec("""
-                    INSERT INTO %s  
-                        SELECT data.geom  
-                        FROM %s data, %s clipping 
-                        WHERE 
-                            ST_Contains(clipping.geom, data.geom);""", \
-                        (AsIs(scratch_table_2), AsIs(scratch_table_1), AsIs(clipping_union_table), ))
-
-                    LogMessage(" --> Step 4: Dumping geometries")
-
-                    postgisExec("CREATE TABLE %s AS SELECT (ST_Dump(geom)).geom geom FROM %s;", (AsIs(scratch_table_3), AsIs(scratch_table_2), ))
-                    postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(scratch_table_3 + "_idx"), AsIs(scratch_table_3), ))
-
-                    LogMessage(" --> Step 5: Dissolving dataset")
-
-                    if postgisCheckTableExists(processed_table): postgisDropTable(processed_table)
-                    postgisExec("CREATE TABLE %s (id INTEGER, geom GEOMETRY(Polygon, 4326));", (AsIs(processed_table), ))
-                    postgisExec("CREATE INDEX %s ON %s(id);", (AsIs(processed_table + 'id_idx'), AsIs(processed_table), ))
-
-                    for grid_square_index in range(len(grid_square_ids)):
-                        grid_square_id = grid_square_ids[grid_square_index]
-
-                        LogMessage(" ----------> Processing grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
-
-                        postgisExec("""
-                        INSERT INTO %s 
-                            SELECT 
-                                grid.id, 
-                                (ST_Dump(ST_Union(ST_Intersection(grid.geom, dataset.geom)))).geom geom 
-                            FROM %s grid, %s dataset 
-                            WHERE grid.id = %s AND ST_geometrytype(dataset.geom) = 'ST_Polygon' GROUP BY grid.id""", (AsIs(processed_table), AsIs(processing_grid), AsIs(scratch_table_3), AsIs(grid_square_id), ))
-
-                    postgisExec("CREATE INDEX %s ON %s USING GIST (geom);", (AsIs(processed_table + "_idx"), AsIs(processed_table), ))
-
-                    if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
-                    if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
-                    if postgisCheckTableExists(scratch_table_3): postgisDropTable(scratch_table_3)
-
-                    LogMessage(" --> COMPLETED: Processed table: " + processed_table)
-                    LogMessage("------------------------------------------------------------")
-
                 parent = getTableParent(source_table)
                 if parent not in parents_lookup: parents_lookup[parent] = []
                 parents_lookup[parent].append(processed_table)
+
+                num_records = postgisGetNumberRecords(orig_table)
+                queue_dict_index = float(str(num_records) + "." + str(queue_index))
+                queue_dict[queue_dict_index] = [queue_index, dataset_name, clipping_union_table, REGENERATE_OUTPUT, HEIGHT_TO_TIP, BLADE_RADIUS, CUSTOM_CONFIGURATION]
+
+    if len(queue_dict) != 0:
+
+        num_datasets_to_process = Value('i', len(queue_dict))
+        chunksize = int(len(queue_dict) / multiprocessing.cpu_count()) + 1
+        queue_datasets = multiprocessDivideChunks(queue_dict, chunksize)
+
+        multiprocessBefore()
+
+        with Pool(processes=getNumberProcesses(), initializer=init_globals_count, initargs=(num_datasets_to_process, )) as p:
+            p.map(processDataset, queue_datasets, chunksize=chunksize)
+
+        multiprocessAfter()
 
     LogMessage("============================================================")
     LogMessage("*** All buffers added to PostGIS and all tables clipped ****")
@@ -3161,16 +3494,35 @@ def runProcessingOnDownloads(output_folder):
 
     LogMessage("Amalgamating and dissolving layers with common parents...")
 
-    finallayers = []
+    amalgamate_id, finallayers, queue_dict = 0, [], {}
     parents = parents_lookup.keys()
     for parent in parents:
         parent_table = buildFinalLayerTableName(parent)
         finallayers.append(reformatDatasetName(parent_table))
         parent_table_exists = postgisCheckTableExists(parent_table)
         if REGENERATE_OUTPUT or (not parent_table_exists):
-            LogMessage("Amalgamating and dissolving children of parent: " + parent)
+            amalgamate_id += 1
+            amalgamate_output = "Amalgamating and dissolving children of parent: " + parent
             if parent_table_exists: postgisDropTable(parent_table)
-            postgisAmalgamateAndDissolve(parent_table, parents_lookup[parent])
+            # Delete any tables and files that are derived from this table
+            deleteDatasetAndAncestors(parent_table)
+            child_num_records = 0
+            for child in parents_lookup[parent]: child_num_records += postgisGetNumberRecords(child)
+            queue_dict_index = float(str(child_num_records) + "." + str(amalgamate_id))
+            queue_dict[queue_dict_index] = [amalgamate_id, amalgamate_output, parent_table, parents_lookup[parent], PROCESSING_GRID_TABLE, CUSTOM_CONFIGURATION]
+
+    if len(queue_dict) != 0:
+
+        num_datasets_to_process = Value('i', len(queue_dict))
+        chunksize = int(len(queue_dict) / multiprocessing.cpu_count()) + 1
+        queue_amalgamate = multiprocessDivideChunks(queue_dict, chunksize)
+
+        multiprocessBefore()
+
+        with Pool(processes=getNumberProcesses(), initializer=init_globals_count, initargs=(num_datasets_to_process, )) as p:
+            p.map(postgisAmalgamateAndDissolve, queue_amalgamate, chunksize=chunksize)
+
+        multiprocessAfter()
 
     LogMessage("============================================================")
     LogMessage("**** All common parent layers amalgamated and dissolved ****")
@@ -3180,6 +3532,7 @@ def runProcessingOnDownloads(output_folder):
 
     LogMessage("Amalgamating and dissolving layers by group...")
 
+    amalgamate_id, queue_dict = 0, {}
     for group in groups:
         group_items = list((structure_lookup[group]).keys())
         if group_items is None: continue
@@ -3188,18 +3541,39 @@ def runProcessingOnDownloads(output_folder):
         group_table_exists = postgisCheckTableExists(group_table)
         group_items.sort()
         if REGENERATE_OUTPUT or (not group_table_exists):
-            LogMessage("Amalgamating and dissolving datasets of group: " + group)
+            amalgamate_id += 1
+            amalgamate_output = "Amalgamating and dissolving datasets of group: " + group
             # Don't do anything if there is only one element with same name as group
             if (len(group_items) == 1) and (group == group_items[0]): continue
             if group_table_exists: postgisDropTable(group_table)
+            # Delete any tables and files that are derived from this table
+            deleteDatasetAndAncestors(group_table)
             children = [buildFinalLayerTableName(table_name) for table_name in group_items]
-            postgisAmalgamateAndDissolve(group_table, children)
+            child_num_records = 0
+            for child in children: child_num_records += postgisGetNumberRecords(child)
+            queue_dict_index = float(str(child_num_records) + "." + str(amalgamate_id))
+            queue_dict[queue_dict_index] = [amalgamate_id, amalgamate_output, group_table, children, PROCESSING_GRID_TABLE, CUSTOM_CONFIGURATION]
+
+    if len(queue_dict) != 0:
+
+        num_datasets_to_process = Value('i', len(queue_dict))
+        chunksize = int(len(queue_dict) / multiprocessing.cpu_count()) + 1
+        queue_amalgamate = multiprocessDivideChunks(queue_dict, chunksize)
+
+        multiprocessBefore()
+
+        with Pool(processes=getNumberProcesses(), initializer=init_globals_count, initargs=(num_datasets_to_process, )) as p:
+            p.map(postgisAmalgamateAndDissolve, queue_amalgamate, chunksize=chunksize)
+
+        multiprocessAfter()
 
     LogMessage("============================================================")
     LogMessage("******* All group layers amalgamated and dissolved *********")
     LogMessage("============================================================")
 
     # Amalgamating all groups as single layer
+
+    # TODO: Implement multiprocessing version of postgisAmalgamateAndDissolve to improve performance when running it once on final layer
 
     LogMessage("Amalgamating and dissolving all groups as single overall layer...")
 
@@ -3209,10 +3583,10 @@ def runProcessingOnDownloads(output_folder):
     finallayers.append(reformatDatasetName(alllayers_table))
     alllayers_table_exists = postgisCheckTableExists(alllayers_table)
     if REGENERATE_OUTPUT or (not alllayers_table_exists):
-        LogMessage("Amalgamating and dissolving single overall layer: " + FINALLAYERS_CONSOLIDATED)
+        amalgamate_output = "Amalgamating and dissolving single overall layer: " + FINALLAYERS_CONSOLIDATED
         if alllayers_table_exists: postgisDropTable(alllayers_table)
         children = [buildFinalLayerTableName(table_name) for table_name in groups]
-        postgisAmalgamateAndDissolve(alllayers_table, children)
+        multiprocessAmalgamateAndDissolve([0, amalgamate_output, alllayers_table, children, PROCESSING_GRID_TABLE])
 
     LogMessage("============================================================")
     LogMessage("*** All groups amalgamated and dissolved as single layer ***")

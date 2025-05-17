@@ -233,6 +233,21 @@ def runSubprocess(subprocess_array):
 # ******************** PostGIS functions ********************
 # ***********************************************************
 
+def postgisCheckTableExists(table_name):
+    """
+    Checks whether table already exists
+    """
+
+    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+
+    table_name = table_name.replace("-", "_")
+    conn = psycopg2.connect(host=POSTGRES_HOST, dbname=POSTGRES_DB, user=POSTGRES_USER, password=POSTGRES_PASSWORD)
+    cur = conn.cursor()
+    cur.execute("SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s);", (table_name, ))
+    tableexists = cur.fetchone()[0]
+    cur.close()
+    return tableexists
+
 def postgisGetResults(sql_text, sql_parameters=None):
     """
     Runs database query and returns results
@@ -252,6 +267,8 @@ def postgisGetClippingAreas():
     Gets all available clipping areas from PostGIS osm_boundaries table
     """
 
+    if not postgisCheckTableExists('osm_boundaries'): return []
+    
     clippingareas = postgisGetResults("""
     SELECT DISTINCT all_names.name FROM 
     (

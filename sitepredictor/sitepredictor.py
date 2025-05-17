@@ -2036,6 +2036,8 @@ def osmDownloadData():
                                     "SELECT geom geometry FROM '" + clipping_union_table + "'", \
                                     "--config", "OGR_PG_ENABLE_METADATA", "NO" ])
 
+        LogMessage("Running osm-export-tool to generate additional datasets")
+
         runSubprocess(['/bin/bash', "./osm-export.sh", DATASETS_FOLDER + basename(OSM_MAIN_DOWNLOAD), OSM_EXPORT_DATA, "-m", yaml_all_filename, "--clip", OVERALL_CLIPPING_FILE])
 
     with open(yaml_all_filename) as stream:
@@ -3405,17 +3407,18 @@ def createDistanceCache(tables):
         if number_cached_records != number_turbines:
             multiprocessing_tables_to_process.append([table, table_index, len(tables)])
 
-    LogMessage("************************************************")
-    LogMessage("********** STARTING MULTIPROCESSING ************")
-    LogMessage("************************************************")
+    if len(multiprocessing_tables_to_process) != 0:
+        LogMessage("************************************************")
+        LogMessage("********** STARTING MULTIPROCESSING ************")
+        LogMessage("************************************************")
 
-    # Run multiprocessing pool
-    with Pool(None) as p:
-        p.map(createTableDistanceCache, multiprocessing_tables_to_process)
+        # Run multiprocessing pool
+        with Pool(None) as p:
+            p.map(createTableDistanceCache, multiprocessing_tables_to_process)
 
-    LogMessage("************************************************")
-    LogMessage("*********** ENDING MULTIPROCESSING *************")
-    LogMessage("************************************************")
+        LogMessage("************************************************")
+        LogMessage("*********** ENDING MULTIPROCESSING *************")
+        LogMessage("************************************************")
 
 
 def createBatchGrid(batch_grid_spacing):
@@ -4219,7 +4222,7 @@ def runSitePredictor(batch_grid_spacing, raster_resolution):
     # Michael Harper, Ben Anderson, Patrick A.B. James, AbuBakr S. Bahaj (2019)
     # https://www.sciencedirect.com/science/article/pii/S0301421519300023
 
-    global RASTER_OUTPUT_FOLDER, OUTPUT_DATA_SAMPLEGRID, CLIPPING_FOLDER, DEFAULT_BATCH_GRID_SPACING
+    global RASTER_OUTPUT_FOLDER, OUTPUT_DATA_SAMPLEGRID, CLIPPING_FOLDER, DEFAULT_BATCH_GRID_SPACING, OUTPUT_ML_RASTER
 
     createAllTurbinesData()
 
@@ -4229,27 +4232,23 @@ def runSitePredictor(batch_grid_spacing, raster_resolution):
     # Create batch grid for multiprocessing
     if batch_grid_spacing is None: batch_grid_spacing = DEFAULT_BATCH_GRID_SPACING
 
-    number_batches = createBatchGrid(batch_grid_spacing)
-    LogMessage("Batch grid spacing set to " + str(batch_grid_spacing) + " metres, will run multiprocessing with " + str(number_batches) + " batches")
-
-    LogMessage("Determining total number of points to be processed...")
-
-    total_points = getSamplingGridNumberPoints(batch_grid_spacing, number_batches, raster_resolution)
-
-    LogMessage("Total number of points to be processed: " + str(total_points))
-
-    # Initialize core distance rasters that will be used by all batches
-    initializeDistanceRasters(raster_resolution, batch_grid_spacing)
-
-    multiprocessing_batch_values = [[batch_index, batch_grid_spacing, raster_resolution] for batch_index in range(1, number_batches + 1)]
-
-    # Run without multiprocessing, ie. in sequence
-    # for item in multiprocessing_batch_values:
-    #     createSamplingGridData(item)
-
     output_data = buildOutputPath(OUTPUT_DATA_SAMPLEGRID, raster_resolution)
 
     if not isfile(output_data):
+
+        number_batches = createBatchGrid(batch_grid_spacing)
+        LogMessage("Batch grid spacing set to " + str(batch_grid_spacing) + " metres, will run multiprocessing with " + str(number_batches) + " batches")
+
+        LogMessage("Determining total number of points to be processed...")
+
+        total_points = getSamplingGridNumberPoints(batch_grid_spacing, number_batches, raster_resolution)
+
+        LogMessage("Total number of points to be processed: " + str(total_points))
+
+        # Initialize core distance rasters that will be used by all batches
+        initializeDistanceRasters(raster_resolution, batch_grid_spacing)
+
+        multiprocessing_batch_values = [[batch_index, batch_grid_spacing, raster_resolution] for batch_index in range(1, number_batches + 1)]
 
         LogMessage("************************************************")
         LogMessage("********** STARTING MULTIPROCESSING ************")
@@ -4300,8 +4299,11 @@ def runSitePredictor(batch_grid_spacing, raster_resolution):
 
             os.remove(batch_output_data)
 
-    # Run machine learning model on sampling grid
-    machinelearningRunModelOnSamplingGrid(raster_resolution)
+    final_raster_path = buildOutputPath(OUTPUT_ML_RASTER, raster_resolution)
+
+    if not isfile(final_raster_path):
+        # Run machine learning model on sampling grid
+        machinelearningRunModelOnSamplingGrid(raster_resolution)
 
     if isdir(CLIPPING_FOLDER): shutil.rmtree(CLIPPING_FOLDER)
 
@@ -4363,6 +4365,11 @@ def main():
     SAMPLING_GRID += str(final_raster_resolution) + "_m__uk"
 
     runSitePredictor(batch_grid_spacing, final_raster_resolution)
+
+    # Copy final results as gzipped tar to /usr/src/openwindenergy/ folder
+    if isfile(buildOutputPath(OUTPUT_ML_RASTER, final_raster_resolution)):
+        subprocess.call("tar -cvzf /usr/src/openwindenergy/build-cli/output/sitepredictor__finalraster_data__" + str(final_raster_resolution) + "_m.tar.gz /usr/src/openwindenergy/sitepredictor/output/*" + str(final_raster_resolution) + "*.*", shell=True)
+        subprocess.call("tar -cvzf /usr/src/openwindenergy/build-cli/output/sitepredictor__intermediate_rasters__" + str(final_raster_resolution) + "_m.tar.gz /usr/src/openwindenergy/sitepredictor/rasters/distance__" + str(final_raster_resolution) + "*.tif", shell=True)
 
 # Only remove log file on main thread
 if __name__ == "__main__":

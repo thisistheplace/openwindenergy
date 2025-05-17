@@ -1,0 +1,9 @@
+osm-buildings-nonresidential:
+    types:
+      - polygons
+    select:
+      - building
+      - shop
+      - brand
+    where:
+      - (shop IS NOT NULL) OR (brand IS NOT NULL) OR ((building IS NOT NULL) AND (building != 'apartments') AND (building != 'detached') AND (building != 'terrace') AND (building != 'semidetached_house') AND (building != 'houseboat') AND (building != 'static_caravan') AND (building != 'residential') AND (building != 'house') AND (building != 'yes'))
