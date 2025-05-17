@@ -1,9 +1,12 @@
 .DS_Store
+DOMAINACTIVE
+INSTALLCOMPLETE
 PROCESSING
 PROCESSINGCOMPLETE
 PROCESSINGSTART
 admin.zip
 log-ogr2ogr.txt
+log.txt
 testcog.html
 spectral.js
 .env
@@ -13,7 +16,6 @@ tilemaker/
 tippecanoe/
 venv/
 __pycache__
-log.txt
 *.log
 *.geojson
 *.pbf
