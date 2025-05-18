@@ -3469,6 +3469,7 @@ def runProcessingOnDownloads(output_folder):
         for parent in structure_lookup[group].keys():
             for dataset_name in structure_lookup[group][parent]:
                 queue_index += 1
+                priority_multiplier = 1
                 buffer = getDatasetBuffer(dataset_name)
                 orig_table = reformatTableName(dataset_name)
                 source_table = reformatTableName(dataset_name)
@@ -3477,12 +3478,14 @@ def runProcessingOnDownloads(output_folder):
                     buffered_table = buildBufferTableName(dataset_name, buffer)
                     processed_table = buildProcessedTableName(buffered_table)
                     source_table = buffered_table
+                    # Buffered tables prioritised as inherently more time-consuming
+                    priority_multiplier = 10
                 parent = getTableParent(source_table)
                 if parent not in parents_lookup: parents_lookup[parent] = []
                 parents_lookup[parent].append(processed_table)
 
-                table_size = postgisGetTableSize(orig_table)
-                queue_dict_index = str(table_size) + "." + str(queue_index)
+                priority = priority_multiplier * postgisGetTableSize(orig_table)
+                queue_dict_index = str(priority) + "." + str(queue_index)
                 queue_dict[queue_dict_index] = [queue_index, dataset_name, clipping_union_table, REGENERATE_OUTPUT, HEIGHT_TO_TIP, BLADE_RADIUS, CUSTOM_CONFIGURATION]
 
     if len(queue_dict) != 0:
@@ -3495,9 +3498,6 @@ def runProcessingOnDownloads(output_folder):
 
         with Pool(processes=getNumberProcesses(), initializer=init_globals_count, initargs=(num_datasets_to_process, )) as p:
             p.map(processDataset, queue_datasets, chunksize=chunksize)
-
-        # with Pool(processes=getNumberProcesses(), initializer=init_globals_count, initargs=(num_datasets_to_process, )) as p:
-        #     p.map(processDataset, queue_datasets)
 
         multiprocessAfter()
 
@@ -3723,7 +3723,9 @@ def runProcessingOnDownloads(output_folder):
     buildQGISFile()
 
     processing_time = time.time() - PROCESSING_START
-    time_text = str(round(processing_time / 60, 1)) + " minutes to complete"
+    processing_time_minutes = round(processing_time / 60, 1)
+    processing_time_hours = round(processing_time / (60 * 60), 1)
+    time_text = str(processing_time_minutes) + " minutes (" + str(processing_time_hours) + " hours) to complete"
     LogMessage("**** Completed processing - " + time_text + " ****")
 
     run_script = './run-cli.sh'

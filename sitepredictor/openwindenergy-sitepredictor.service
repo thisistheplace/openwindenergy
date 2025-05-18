@@ -1,0 +1,14 @@
+[Unit]
+Description=openwindenergy-sitepredictor.service
+After=network.target
+
+[Service]
+CPUWeight=1000
+Type=simple
+User=www-data
+WorkingDirectory=/usr/src/openwindenergy/sitepredictor/
+ExecStart=/usr/src/openwindenergy/sitepredictor/build-cli.sh 200000 --resolution 500
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
