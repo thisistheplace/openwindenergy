@@ -145,6 +145,7 @@ SKIP_FONTS_INSTALLATION             = False
 CKAN_USER_AGENT                     = 'ckanapi/1.0 (+https://openwind.energy)'
 DOWNLOAD_USER_AGENT                 = 'openwindenergy/' + OPENWINDENERGY_VERSION
 LOG_SINGLE_PASS                     = WORKING_FOLDER + 'log.txt'
+PROCESSING_START                    = None
 PROCESSING_STATE_FILE               = 'PROCESSING'
 PROCESSING_COMPLETE_FILE            = 'PROCESSINGCOMPLETE'
 
@@ -713,6 +714,14 @@ def postgisGetNumberRecords(table_name):
     results = postgisGetResults("SELECT COUNT(*) FROM %s;", (AsIs(table_name), ))
     return results[0][0]
 
+def postgisGetTableSize(table_name):
+    """
+    Gets size of table
+    """
+
+    results = postgisGetResults("SELECT pg_relation_size(%s);", (table_name, ))
+    return results[0][0]
+
 def postgisGetCustomTables():
     """
     Gets list of all custom configuration tables in database
@@ -903,7 +912,7 @@ def singleprocessAmalgamateAndDissolveGridSquareStep2(process_parameters):
     target_table, grid_square_index, grid_square_count, grid_square_id, scratch_table_1, scratch_table_2 = \
         process_parameters[0], process_parameters[1], process_parameters[2], process_parameters[3], process_parameters[4], process_parameters[5] 
 
-    LogMessage("STARTING: " + target_table + ": Processing grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
+    LogMessage("STARTING: " + target_table + ": Grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
 
     postgisExec("""
     INSERT INTO %s 
@@ -912,7 +921,7 @@ def singleprocessAmalgamateAndDissolveGridSquareStep2(process_parameters):
         (SELECT (ST_Dump(ST_Union(geom))).geom geom FROM %s AS dataset WHERE id = %s) final 
         WHERE ST_geometrytype(final.geom) = 'ST_Polygon';""", (AsIs(scratch_table_2), AsIs(scratch_table_1), AsIs(grid_square_id), ))
 
-    LogMessage("FINISHED: " + target_table + ": Processed grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
+    LogMessage("FINISHED: " + target_table + ": Grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
 
 def multiprocessAmalgamateAndDissolve(amalgamate_parameters):
     """
@@ -3202,7 +3211,7 @@ def runProcessingOnDownloads(output_folder):
     - Converts final files to GeoJSON (EPSG:4326)
     """
 
-    global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_FILE_PREFIX
+    global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_FILE_PREFIX, PROCESSING_START
     global DEBUG_RUN, HEIGHT_TO_TIP, WORKING_CRS, BUILD_FOLDER, OSM_MAIN_DOWNLOAD, OSM_EXPORT_DATA, OSM_BOUNDARIES
     global FINALLAYERS_OUTPUT_FOLDER, FINALLAYERS_CONSOLIDATED, OVERALL_CLIPPING_FILE, REGENERATE_INPUT, REGENERATE_OUTPUT
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
@@ -3426,7 +3435,10 @@ def runProcessingOnDownloads(output_folder):
         if tableexists: postgisDropTable(imported_table)
         all_tables = deleteAncestors(imported_table, all_tables)
 
-        queue_dict_index = float(str(os.path.getsize(join(output_folder, downloaded_file))) + "." + str(queue_index))
+        file_size = os.path.getsize(join(output_folder, downloaded_file))
+        processing_priority = file_size
+        if downloaded_file.endswith('.geojson'): processing_priority = (4 * processing_priority)
+        queue_dict_index = str(processing_priority) + "." + str(queue_index)
         queue_dict[queue_dict_index] = [downloaded_file, output_folder, imported_table, core_dataset_name]
         queue_import.append([downloaded_file, output_folder, imported_table, core_dataset_name])
 
@@ -3469,8 +3481,8 @@ def runProcessingOnDownloads(output_folder):
                 if parent not in parents_lookup: parents_lookup[parent] = []
                 parents_lookup[parent].append(processed_table)
 
-                num_records = postgisGetNumberRecords(orig_table)
-                queue_dict_index = float(str(num_records) + "." + str(queue_index))
+                table_size = postgisGetTableSize(orig_table)
+                queue_dict_index = str(table_size) + "." + str(queue_index)
                 queue_dict[queue_dict_index] = [queue_index, dataset_name, clipping_union_table, REGENERATE_OUTPUT, HEIGHT_TO_TIP, BLADE_RADIUS, CUSTOM_CONFIGURATION]
 
     if len(queue_dict) != 0:
@@ -3483,6 +3495,9 @@ def runProcessingOnDownloads(output_folder):
 
         with Pool(processes=getNumberProcesses(), initializer=init_globals_count, initargs=(num_datasets_to_process, )) as p:
             p.map(processDataset, queue_datasets, chunksize=chunksize)
+
+        # with Pool(processes=getNumberProcesses(), initializer=init_globals_count, initargs=(num_datasets_to_process, )) as p:
+        #     p.map(processDataset, queue_datasets)
 
         multiprocessAfter()
 
@@ -3506,9 +3521,9 @@ def runProcessingOnDownloads(output_folder):
             if parent_table_exists: postgisDropTable(parent_table)
             # Delete any tables and files that are derived from this table
             deleteDatasetAndAncestors(parent_table)
-            child_num_records = 0
-            for child in parents_lookup[parent]: child_num_records += postgisGetNumberRecords(child)
-            queue_dict_index = float(str(child_num_records) + "." + str(amalgamate_id))
+            table_size_children = 0
+            for child in parents_lookup[parent]: table_size_children += postgisGetTableSize(child)
+            queue_dict_index = str(table_size_children) + "." + str(amalgamate_id)
             queue_dict[queue_dict_index] = [amalgamate_id, amalgamate_output, parent_table, parents_lookup[parent], PROCESSING_GRID_TABLE, CUSTOM_CONFIGURATION]
 
     if len(queue_dict) != 0:
@@ -3549,9 +3564,9 @@ def runProcessingOnDownloads(output_folder):
             # Delete any tables and files that are derived from this table
             deleteDatasetAndAncestors(group_table)
             children = [buildFinalLayerTableName(table_name) for table_name in group_items]
-            child_num_records = 0
-            for child in children: child_num_records += postgisGetNumberRecords(child)
-            queue_dict_index = float(str(child_num_records) + "." + str(amalgamate_id))
+            table_size_children = 0
+            for child in children: table_size_children += postgisGetTableSize(child)
+            queue_dict_index = str(table_size_children) + "." + str(amalgamate_id)
             queue_dict[queue_dict_index] = [amalgamate_id, amalgamate_output, group_table, children, PROCESSING_GRID_TABLE, CUSTOM_CONFIGURATION]
 
     if len(queue_dict) != 0:
@@ -3707,8 +3722,9 @@ def runProcessingOnDownloads(output_folder):
 
     buildQGISFile()
 
-    # Run layers through tippecanoe
-    LogMessage("**** Completed processing ****")
+    processing_time = time.time() - PROCESSING_START
+    time_text = str(round(processing_time / 60, 1)) + " minutes to complete"
+    LogMessage("**** Completed processing - " + time_text + " ****")
 
     run_script = './run-cli.sh'
     if BUILD_FOLDER == 'build-docker/': run_script = './run-docker.sh'
@@ -4162,10 +4178,12 @@ def main():
     Main function - put here to allow multiprocessing to work
     """
 
-    global SERVER_BUILD
+    global SERVER_BUILD, PROCESSING_START
     global BUILD_FOLDER, LOG_SINGLE_PASS, PROCESSING_COMPLETE_FILE, HEIGHT_TO_TIP, BLADE_RADIUS
     global CUSTOM_CONFIGURATION, REGENERATE_INPUT, REGENERATE_OUTPUT, PERFORM_DOWNLOAD, SKIP_FONTS_INSTALLATION
     global CKAN_URL, DATASETS_DOWNLOADS_FOLDER, PROCESSING_COMPLETE_FILE, PROCESSING_STATE_FILE
+
+    PROCESSING_START = time.time()
 
     makeFolder(BUILD_FOLDER)
 
@@ -4299,7 +4317,7 @@ Possible additional arguments:
         downloadDatasets(CKAN_URL, DATASETS_DOWNLOADS_FOLDER)
 
     runProcessingOnDownloads(DATASETS_DOWNLOADS_FOLDER)
-
+    
     # Set up status flag files
 
     with open(PROCESSING_COMPLETE_FILE, 'w') as file: file.write("PROCESSINGCOMPLETE")
@@ -4312,4 +4330,9 @@ if __name__ == "__main__":
 # Always initialise logging so multiprocessing threads get logged
 initLogging()
 
-if __name__ == "__main__": main()
+if __name__ == "__main__": 
+    try:
+        main()
+    except Exception as e:
+        error = str(e)
+        LogError(error)

@@ -144,6 +144,7 @@ OUTPUT_ML_RASTER                    = OUTPUT_FOLDER + 'output-machinelearning.ti
 ML_FOLDER                           = WORKING_FOLDER + "machinelearning/"
 # ML_MAX_RUNTIME_SECS                 = 5*60
 ML_MAX_RUNTIME_SECS                 = 30*60
+ML_MAX_MODELS                       = 10
 ML_STATUS_SUCCESS                   = ['Operational', 'Awaiting Construction', 'Under Construction', 'Decommissioned', 'Planning Permission Expired']
 ML_STATUS_FAILURE                   = ['Application Refused', 'Abandoned', 'Appeal Withdrawn', 'Application Withdrawn', 'Appeal Refused']
 ML_STATUS_PENDING                   = ['Revised', 'Application Submitted', 'Appeal Lodged', 'No Application Required']
@@ -1709,6 +1710,8 @@ def machinelearningInitialize():
 
     global ML_FOLDER
 
+    LogMessage("Initializing h2o machine learning")
+
     try:
         h2o.init(start_h2o=False)
     except Exception as e:
@@ -1734,6 +1737,8 @@ def machinelearningDeleteSavedModels():
 
     global ML_FOLDER
 
+    LogMessage("Deleting existing saved machine learning models")
+
     savedmodels = getFilesInFolder(ML_FOLDER)
     for savedmodel in savedmodels: os.remove(ML_FOLDER + savedmodel)
 
@@ -1743,6 +1748,8 @@ def machinelearningGetSavedModel():
     """
 
     global ML_FOLDER
+
+    LogMessage("Loading saved machine learning model")
 
     savedmodels = getFilesInFolder(ML_FOLDER)
 
@@ -1755,7 +1762,9 @@ def machinelearningBuildModel():
     Builds machine learning model using AutoML - h2o
     """
 
-    global ML_FOLDER, ML_MAX_RUNTIME_SECS
+    global ML_FOLDER, ML_MAX_RUNTIME_SECS, ML_MAX_MODELS
+
+    LogMessage("Building machine learning model...")
 
     # Initialize machine learning
     machinelearningInitialize()
@@ -1769,8 +1778,11 @@ def machinelearningBuildModel():
     y = 'success'
     x.remove(y)
 
+    LogMessage("Running machine learning training using training data")
+
     # Run machine learning on training set
-    h2o_automl = H2OAutoML(sort_metric='mse', max_runtime_secs=ML_MAX_RUNTIME_SECS, seed=666)
+    # h2o_automl = H2OAutoML(sort_metric='mse', max_runtime_secs=ML_MAX_RUNTIME_SECS, seed=666)
+    h2o_automl = H2OAutoML(sort_metric='mse', max_models=ML_MAX_MODELS, seed=666)
     h2o_automl.train(x=x, y=y, training_frame=h2o_frame)
 
     # Show final leaderboard of AutoML machine learning to user
@@ -1781,6 +1793,7 @@ def machinelearningBuildModel():
     machinelearningDeleteSavedModels()
 
     # Save 'leader', ie. most optimized model, of all machine learning models
+    LogMessage("Saving machine learning model")
     h2o.save_model(model=h2o_automl.leader, path=ML_FOLDER, force=True)
 
 def machinelearningTestModel(df_test):
@@ -1799,11 +1812,12 @@ def machinelearningTestModel(df_test):
     h2o_frame = h2o.H2OFrame(df_test)
 
     # Make predictions using machine learning model
+    LogMessage("Applying machine learning model to new data")
     y_pred = h2o_automl.predict(h2o_frame)
     df_predicted = y_pred.as_data_frame().to_numpy().ravel()
 
     # Show sample predictions to user as sanity check
-    print(y_pred.as_data_frame())
+    LogMessage(str(y_pred.as_data_frame()))
 
     # Plot results
     h2o_compare = pd.DataFrame(data={'actual': df_test['success'], 'predicted': df_predicted})
@@ -1818,6 +1832,8 @@ def machinelearningPrepareTrainingData():
     """
 
     global ML_IGNORE_COLUMNS, OUTPUT_DATA_ALLTURBINES
+
+    LogMessage("Loading machine learning training data")
 
     # Load dataset
     df = pd.read_csv(OUTPUT_DATA_ALLTURBINES, delimiter=',', low_memory=False)
@@ -1890,6 +1906,7 @@ def machinelearningRunModelOnSamplingGrid(raster_resolution):
     h2o_frame_test = h2o.H2OFrame(df_samplegrid)
 
     # Run machine learning model with sample grid data
+    LogMessage("Applying machine learning model to new data")
     y_pred = h2o_automl.predict(h2o_frame_test)
 
     df_predicted = y_pred.as_data_frame().to_numpy().ravel()
@@ -4368,7 +4385,7 @@ def main():
 
     # Copy final results as gzipped tar to /usr/src/openwindenergy/ folder
     if isfile(buildOutputPath(OUTPUT_ML_RASTER, final_raster_resolution)):
-        subprocess.call("tar -cvzf /usr/src/openwindenergy/build-cli/output/sitepredictor__finalraster_data__" + str(final_raster_resolution) + "_m.tar.gz /usr/src/openwindenergy/sitepredictor/output/*" + str(final_raster_resolution) + "*.*", shell=True)
+        subprocess.call("tar -cvzf /usr/src/openwindenergy/build-cli/output/sitepredictor__finalraster_data__" + str(final_raster_resolution) + "_m.tar.gz /usr/src/openwindenergy/sitepredictor/output/output-turbines.csv /usr/src/openwindenergy/sitepredictor/output/*" + str(final_raster_resolution) + "*.*", shell=True)
         subprocess.call("tar -cvzf /usr/src/openwindenergy/build-cli/output/sitepredictor__intermediate_rasters__" + str(final_raster_resolution) + "_m.tar.gz /usr/src/openwindenergy/sitepredictor/rasters/distance__" + str(final_raster_resolution) + "*.tif", shell=True)
 
 # Only remove log file on main thread
