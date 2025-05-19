@@ -4403,7 +4403,11 @@ def main():
 
     # Copy final results as gzipped tar to /usr/src/openwindenergy/ folder
     if isfile(buildOutputPath(OUTPUT_ML_RASTER, final_raster_resolution)):
-        subprocess.call("tar -cvzf /usr/src/openwindenergy/build-cli/output/sitepredictor__finalraster_data__" + str(final_raster_resolution) + "_m.tar.gz /usr/src/openwindenergy/sitepredictor/output/output-turbines.csv /usr/src/openwindenergy/sitepredictor/output/*" + str(final_raster_resolution) + "*.*", shell=True)
+        data_samplegrid = basename(buildOutputPath(OUTPUT_DATA_SAMPLEGRID, final_raster_resolution))
+        ml_geojson = basename(buildOutputPath(OUTPUT_ML_GEOJSON, final_raster_resolution))
+        ml_raster = basename(buildOutputPath(OUTPUT_ML_RASTER, final_raster_resolution))
+        ml_csv = basename(buildOutputPath(OUTPUT_ML_CSV, final_raster_resolution))
+        subprocess.call("tar -cjf /usr/src/openwindenergy/build-cli/output/sitepredictor__finalraster_data__" + str(final_raster_resolution) + "_m.tar.gz -C /usr/src/openwindenergy/sitepredictor/output/ " + data_samplegrid + " " + ml_geojson + " " + ml_raster + " " + ml_csv, shell=True)
         subprocess.call("tar -cvzf /usr/src/openwindenergy/build-cli/output/sitepredictor__intermediate_rasters__" + str(final_raster_resolution) + "_m.tar.gz /usr/src/openwindenergy/sitepredictor/rasters/distance__" + str(final_raster_resolution) + "*.tif", shell=True)
 
 # Only remove log file on main thread
