@@ -4341,7 +4341,7 @@ def main():
     batch_grid_spacing = None
 
     if len(sys.argv) > 1:
-        batch_grid_spacing_set, resample = False, False
+        batch_grid_spacing_set, resample, rerunml = False, False, False
 
         arg_index = 1
         while True:
@@ -4357,6 +4357,10 @@ def main():
                 resample = True
                 LogMessage("--resample argument passed: Deleting output files")
 
+            if arg == '--rerunml':
+                rerunml = True
+                LogMessage("--rerunml argument passed: Deleting ML model and related output files")
+
             if arg == '--resolution':
                 if len(sys.argv) > arg_index:
                     resolution = sys.argv[arg_index + 1]
@@ -4367,6 +4371,8 @@ def main():
 
             arg_index += 1
 
+        files_to_delete = None
+
         if resample:
             # Delete RASTER_OUTPUT_FOLDER just to be safe
             shutil.rmtree(RASTER_OUTPUT_FOLDER)
@@ -4376,8 +4382,20 @@ def main():
                                     buildOutputPath(OUTPUT_ML_RASTER, final_raster_resolution), \
                                     buildOutputPath(OUTPUT_ML_CSV, final_raster_resolution) \
                                 ]
+
+        if rerunml:
+            # Delete ML model and any files derived from applying it
+            machinelearningDeleteSavedModels()
+            files_to_delete =   [ \
+                                    buildOutputPath(OUTPUT_ML_GEOJSON, final_raster_resolution), \
+                                    buildOutputPath(OUTPUT_ML_RASTER, final_raster_resolution), \
+                                    buildOutputPath(OUTPUT_ML_CSV, final_raster_resolution) \
+                                ]
+
+        if files_to_delete is not None:
             for file_to_delete in files_to_delete:
                 if isfile(file_to_delete): os.remove(file_to_delete)
+
 
     SAMPLING_GRID += str(final_raster_resolution) + "_m__uk"
 

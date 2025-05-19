@@ -44,6 +44,7 @@ import yaml
 import sqlite3
 import psycopg2
 import time
+import math
 import geopandas as gpd
 import pandas as pd
 import shapefile
@@ -487,18 +488,23 @@ def multiprocessDivideChunks(queue_dict, chunksize):
 
     queue_dict = dict(sorted(queue_dict.items(), reverse=True))
     queue_datasets_largest_first = [queue_dict[item] for item in queue_dict]
+    processes = math.ceil(len(queue_dict) / chunksize)
 
     queue_index, chunk_items = 0, {}
     for chunk in range(chunksize):
-        for cpu in range(multiprocessing.cpu_count()):
+        for process in range(processes):
             if queue_index >= len(queue_datasets_largest_first): break
-            chunk_index = chunk + (cpu * chunksize)
+            chunk_index = chunk + (process * chunksize)
             chunk_items[chunk_index] = queue_datasets_largest_first[queue_index]
             queue_index += 1
         if queue_index >= len(queue_datasets_largest_first): break
 
     chunk_dict = dict(sorted(chunk_items.items()))
     queue_datasets = [chunk_dict[item] for item in chunk_dict]
+    
+    if len(queue_dict) != len(queue_datasets):
+        LogError("multiprocessDivideChunks: Mismatched counts")
+        exit()
 
     return queue_datasets
 
@@ -902,7 +908,9 @@ def singleprocessAmalgamateAndDissolveGridSquareStep1(process_parameters):
             WHERE grid.id = %s
         ) final WHERE ST_geometrytype(final.geom) = 'ST_Polygon';""", (AsIs(scratch_table_1), AsIs(processing_grid), AsIs(children_sql), AsIs(grid_square_id), ))
 
-    LogMessage("FINISHED: " + target_table + ": Grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
+    with global_count.get_lock(): 
+        global_count.value -= 1
+        LogMessage("FINISHED: " + target_table + ": Grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count) + " [" + str(global_count.value) + " grid square(s) to be processed]")
 
 def singleprocessAmalgamateAndDissolveGridSquareStep2(process_parameters):
     """
@@ -921,7 +929,9 @@ def singleprocessAmalgamateAndDissolveGridSquareStep2(process_parameters):
         (SELECT (ST_Dump(ST_Union(geom))).geom geom FROM %s AS dataset WHERE id = %s) final 
         WHERE ST_geometrytype(final.geom) = 'ST_Polygon';""", (AsIs(scratch_table_2), AsIs(scratch_table_1), AsIs(grid_square_id), ))
 
-    LogMessage("FINISHED: " + target_table + ": Grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count))
+    with global_count.get_lock(): 
+        global_count.value -= 1
+        LogMessage("FINISHED: " + target_table + ": Grid square " + str(grid_square_index + 1) + "/" + str(grid_square_count) + " [" + str(global_count.value) + " grid square(s) to be processed]")
 
 def multiprocessAmalgamateAndDissolve(amalgamate_parameters):
     """
@@ -975,11 +985,13 @@ def multiprocessAmalgamateAndDissolve(amalgamate_parameters):
 
         if len(grid_process_queue) != 0:
 
+            num_cells_to_process = Value('i', len(grid_process_queue))
             chunksize = int(len(grid_process_queue) / multiprocessing.cpu_count()) + 1
 
             multiprocessBefore()
 
-            with Pool(processes=getNumberProcesses()) as p: p.map(singleprocessAmalgamateAndDissolveGridSquareStep1, grid_process_queue, chunksize=chunksize)
+            with Pool(processes=getNumberProcesses(), initializer=init_globals_count, initargs=(num_cells_to_process, )) as p: 
+                p.map(singleprocessAmalgamateAndDissolveGridSquareStep1, grid_process_queue, chunksize=chunksize)
 
             multiprocessAfter()
 
@@ -998,11 +1010,13 @@ def multiprocessAmalgamateAndDissolve(amalgamate_parameters):
 
     if len(grid_process_queue) != 0:
 
+        num_cells_to_process = Value('i', len(grid_process_queue))
         chunksize = int(len(grid_process_queue) / multiprocessing.cpu_count()) + 1
 
         multiprocessBefore()
 
-        with Pool(processes=getNumberProcesses()) as p: p.map(singleprocessAmalgamateAndDissolveGridSquareStep2, grid_process_queue, chunksize=chunksize)
+        with Pool(processes=getNumberProcesses(), initializer=init_globals_count, initargs=(num_cells_to_process, )) as p: 
+            p.map(singleprocessAmalgamateAndDissolveGridSquareStep2, grid_process_queue, chunksize=chunksize)
 
         multiprocessAfter()
 
@@ -1122,7 +1136,7 @@ def postgisAmalgamateAndDissolve(amalgamate_parameters):
 
     with global_count.get_lock(): 
         global_count.value -= 1
-        LogMessage(prefix + "FINISHED: Created amalgamated and dissolved table: " + target_table + " [" + str(global_count.value) + " datasets to be processed]")
+        LogMessage(prefix + "FINISHED: Created amalgamated and dissolved table: " + target_table + " [" + str(global_count.value) + " dataset(s) to be processed]")
 
     if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
     if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
@@ -3100,7 +3114,7 @@ def processDataset(dataset_parameters):
     processed_table = buildProcessedTableName(source_table)
 
     with global_count.get_lock(): 
-        LogMessage(prefix + "STARTING: Processing: " + source_table + " [" + str(global_count.value) + " datasets to be processed]")
+        LogMessage(prefix + "STARTING: Processing: " + source_table + " [" + str(global_count.value) + " dataset(s) to be processed]")
 
     if buffer is not None:
         buffered_table = buildBufferTableName(dataset_name, buffer)
@@ -3199,7 +3213,7 @@ def processDataset(dataset_parameters):
 
     with global_count.get_lock(): 
         global_count.value -= 1
-        LogMessage(prefix + "FINISHED: Processed table: " + processed_table + " [" + str(global_count.value) + " datasets to be processed]")
+        LogMessage(prefix + "FINISHED: Processed table: " + processed_table + " [" + str(global_count.value) + " dataset(s) to be processed]")
 
 def runProcessingOnDownloads(output_folder):
     """
@@ -3446,7 +3460,7 @@ def runProcessingOnDownloads(output_folder):
 
         multiprocessBefore()
 
-        chunksize = int(len(queue_import) / multiprocessing.cpu_count()) + 1
+        chunksize = math.ceil(len(queue_import) / (4 * multiprocessing.cpu_count()))
         queue_import = multiprocessDivideChunks(queue_dict, chunksize)
 
         with Pool(processes=getNumberProcesses()) as p: p.map(importDataset, queue_import, chunksize=chunksize)
@@ -3479,7 +3493,7 @@ def runProcessingOnDownloads(output_folder):
                     processed_table = buildProcessedTableName(buffered_table)
                     source_table = buffered_table
                     # Buffered tables prioritised as inherently more time-consuming
-                    priority_multiplier = 10
+                    priority_multiplier = 100
                 parent = getTableParent(source_table)
                 if parent not in parents_lookup: parents_lookup[parent] = []
                 parents_lookup[parent].append(processed_table)
@@ -3491,13 +3505,16 @@ def runProcessingOnDownloads(output_folder):
     if len(queue_dict) != 0:
 
         num_datasets_to_process = Value('i', len(queue_dict))
-        chunksize = int(len(queue_dict) / multiprocessing.cpu_count()) + 1
+        chunksize = math.ceil(len(queue_dict) / (4 * multiprocessing.cpu_count()))
         queue_datasets = multiprocessDivideChunks(queue_dict, chunksize)
 
         multiprocessBefore()
 
         with Pool(processes=getNumberProcesses(), initializer=init_globals_count, initargs=(num_datasets_to_process, )) as p:
             p.map(processDataset, queue_datasets, chunksize=chunksize)
+
+        # with Pool(processes=getNumberProcesses(), initializer=init_globals_count, initargs=(num_datasets_to_process, )) as p:
+        #     p.map(processDataset, queue_datasets)
 
         multiprocessAfter()
 
@@ -3531,6 +3548,8 @@ def runProcessingOnDownloads(output_folder):
         num_datasets_to_process = Value('i', len(queue_dict))
         chunksize = int(len(queue_dict) / multiprocessing.cpu_count()) + 1
         queue_amalgamate = multiprocessDivideChunks(queue_dict, chunksize)
+
+        print(json.dumps(queue_amalgamate, indent=4))
 
         multiprocessBefore()
 
@@ -4332,9 +4351,4 @@ if __name__ == "__main__":
 # Always initialise logging so multiprocessing threads get logged
 initLogging()
 
-if __name__ == "__main__": 
-    try:
-        main()
-    except Exception as e:
-        error = str(e)
-        LogError(error)
+if __name__ == "__main__": main()
