@@ -7,6 +7,7 @@ PROCESSINGSTART
 admin.zip
 log-ogr2ogr.txt
 log.txt
+log-certbot.txt
 testcog.html
 spectral.js
 .env
@@ -25,6 +26,8 @@ __pycache__
 *.tif
 britain-and-ireland-latest.osm.pbf
 app/node_modules
+admin/static/js/bounds-centre.js
+admin/static/js/datasets-latest-style.js
 build-cli/
 build-docker/
 geonode/
