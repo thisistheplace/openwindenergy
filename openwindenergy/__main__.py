@@ -11,6 +11,7 @@ from .format import format_float
 from .postgis.manager import PostGisManager
 from .logging import init_logging
 from .io.dirs import make_folder
+from .workflow.clipping_area import process_clipping_area
 
 LOG = mp.get_logger()
 
@@ -146,7 +147,7 @@ def main(
         LOG.info(
             f"--clipping_area argument passed: Using custom clipping area '{clipping_area}'"
         )
-        CUSTOM_CONFIGURATION = processClippingArea(clipping_area)
+        CUSTOM_CONFIGURATION = process_clipping_area(clipping_area)
 
     if purge_all:
         LOG.info("--purgeall argument passed: Clearing database and all build files")

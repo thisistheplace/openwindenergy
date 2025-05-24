@@ -1121,14 +1121,6 @@ def normalizeTitle(title):
 
     return title
 
-def reformatTableNameAbsolute(name):
-    """
-    Reformats names, eg. dataset names, ignoring custom settings (so absolute) to be compatible with Postgres
-    Different from 'reformatTableName' which will add CUSTOM_CONFIGURATION_TABLE_PREFIX if using custom configuration
-    """
-
-    return name.replace('.gpkg', '').replace("-", "_")
-
 def reformatTableName(name):
     """
     Reformats names, eg. dataset names, to be compatible with Postgres
@@ -1954,33 +1946,6 @@ def processCustomConfiguration(customconfig):
 
     return yaml_content
 
-def processClippingArea(clippingarea):
-    """
-    Process custom clipping area
-    """
-
-    global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_TABLE_PREFIX
-
-    countries = ['england', 'scotland', 'wales', 'northern-ireland']
-
-    if clippingarea.lower() == 'uk': return CUSTOM_CONFIGURATION # The default setup so change nothing
-    if clippingarea.lower().replace(' ', '-') in countries: country = clippingarea.lower()
-    else: country = getCountryFromArea(clippingarea)
-
-    if CUSTOM_CONFIGURATION is None: CUSTOM_CONFIGURATION = {'configuration': '--clip ' + clippingarea}
-    CUSTOM_CONFIGURATION['clipping'] = [clippingarea]
-
-    if 'areas' not in CUSTOM_CONFIGURATION: CUSTOM_CONFIGURATION['areas'] = [country, 'uk']
-    elif country not in CUSTOM_CONFIGURATION: CUSTOM_CONFIGURATION['areas'].append(country)
-
-    LogMessage("Custom clipping area: Clipping on '" + clippingarea + "'")
-    LogMessage("Custom clipping area: Selecting country-specific datasets for '" + country + "'")
-    LogMessage("Custom clipping area: Note all generated tables for custom configuration will have '" + CUSTOM_CONFIGURATION_TABLE_PREFIX + "' prefix")
-    LogMessage("Custom clipping area: Dropping previous custom configuration database tables")
-    postgisDropCustomTables()
-
-    return CUSTOM_CONFIGURATION
-
 def guessWFSLayerIndex(layers):
     """
     Get WFS index from array of layers
@@ -2770,36 +2735,6 @@ def initPipeline(command_line):
             postgisExec("CREATE INDEX ON %s (council_name)", (AsIs(osm_boundaries_table), ))
             postgisExec("CREATE INDEX ON %s (admin_level)", (AsIs(osm_boundaries_table), ))
 
-def getCountryFromArea(area):
-    """
-    Determine country that area is in using OSM_BOUNDARIES_GPKG
-    """
-
-    global OSM_BOUNDARIES
-    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, WORKING_CRS
-    global OSM_NAME_CONVERT
-
-    osm_boundaries_table = reformatTableNameAbsolute(OSM_BOUNDARIES)
-    countries = [OSM_NAME_CONVERT[country] for country in OSM_NAME_CONVERT.keys()]
-
-    results = postgisGetResults("""
-    WITH primaryarea AS
-    (
-        SELECT geom FROM %s WHERE (name = %s) OR (council_name = %s) LIMIT 1
-    )
-    SELECT 
-        name, 
-        ST_Area(ST_Intersection(primaryarea.geom, secondaryarea.geom)) geom_intersection 
-    FROM %s secondaryarea, primaryarea 
-    WHERE name = ANY (%s) AND ST_Intersects(primaryarea.geom, secondaryarea.geom) ORDER BY geom_intersection DESC LIMIT 1;
-    """, (AsIs(osm_boundaries_table) , area, area, AsIs(osm_boundaries_table), countries, ))
-
-    containing_country = results[0][0]
-
-    for canonical_country in OSM_NAME_CONVERT.keys():
-        if OSM_NAME_CONVERT[canonical_country] == containing_country: return canonical_country
-
-    return None
 
 def importDataset(dataset_parameters):
     """
