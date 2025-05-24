@@ -9,9 +9,11 @@ from .config import process_custom_config
 from .constants import *
 from .format import format_float
 from .postgis.manager import PostGisManager
+from .postgis import tables as pgistables
 from .logging import init_logging
 from .io.dirs import make_folder
 from .workflow.clipping_area import process_clipping_area
+from .workflow.purge import purge_all
 
 LOG = mp.get_logger()
 
@@ -153,25 +155,25 @@ def main(
         LOG.info("--purgeall argument passed: Clearing database and all build files")
         REGENERATE_INPUT = True
         REGENERATE_OUTPUT = True
-        purgeAll()
+        purge_all()
 
     if purge_db:
         LOG.info("--purgedb argument passed: Clearing database")
         REGENERATE_INPUT = True
         REGENERATE_OUTPUT = True
-        postgisDropAllTables()
+        pgistables.drop_all_tables()
 
     if purge_derived:
         LOG.info("--purgederived argument passed: Clearing derived database tables")
         REGENERATE_OUTPUT = True
-        postgisDropDerivedTables()
+        pgistables.drop_derived_tables()
 
     if purge_amalgamated:
         LOG.info(
             "--purgeamalgamated argument passed: Clearing amalgamated database tables"
         )
         REGENERATE_OUTPUT = True
-        postgisDropAmalgamatedTables()
+        pgistables.drop_amalgamated_tables()
 
     if skip_fonts:
         LOG.info(
