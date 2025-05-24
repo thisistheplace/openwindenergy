@@ -4,9 +4,10 @@ import os
 from os.path import isfile
 import time
 import typer
-from typing import Optional
+from typing_extensions import Annotated
 
 from .constants import *
+from .format import format_float
 from .postgis.manager import PostGisManager
 from .logging import init_logging
 from .io.dirs import make_folder
@@ -14,33 +15,21 @@ from .io.dirs import make_folder
 LOG = mp.get_logger()
 
 def main(
-        height_to_tip: Optional[float],
-        
-):
+        height_to_tip: Annotated[float, typer.Argument(help="Height to blade tip of target wind turbine, in metres. Uses default blade-radius.")] = HEIGHT_TO_TIP,
+        blade_radius: Annotated[float, typer.Argument(help="Blade radius of target wind turbine, in metres. Uses default if not provided.")] = BLADE_RADIUS,
+        custom_config: Annotated[str, typer.Argument(help="Path to custom YML configuration file. Can be local file path, internet url or name on CKAN open data portal (https://data.openwind.energy).")] = None,
+        clipping_area: Annotated[str, typer.Argument(help="Name of custom area for clipping. Uses OSM name from osm-boundaries.gpkg. Overrides any 'clipping' setting in custom YML.")] = None,
+        regenerate_dataset: Annotated[str, typer.Argument(help="Regenerate specific named dataset by redownloading and recreating all tables relating to dataset.")] = None,
+        purge_all: Annotated[bool, typer.Option(help="Clear all downloads and database tables as if starting fresh.")] = False,
+        purge_db: Annotated[bool, typer.Option(help="Clear all PostGIS tables and reexport final layer files.")] = False,
+        purge_derived: Annotated[bool, typer.Option(help="Clear all derived (ie. non-core data) PostGIS tables and reexport final layer files.")] = False,
+        purge_amalgamated: Annotated[bool, typer.Option(help="Clear all amalgamated PostGIS tables and reexport final layer files.")] = False,
+        skip_download: Annotated[bool, typer.Option(help="Skip download stage and just do PostGIS processing.")] = False,
+        skip_fonts: Annotated[bool, typer.Option(help="Skip font installation stage and use hosted version of openmaptiles fonts.")] = False,
+        build_tile_server: Annotated[bool, typer.Option(help="Rebuild files for tileserver.")] = None
+    ):
     """
-    Run openwindenergy
-
-    python3 openwindenergy.py
-    - Uses default values for turbine height-to-tip and blade-radius values.
-
-    python3 openwindenergy.py [HEIGHT TO TIP]
-    - Where 'HEIGHT TO TIP' is height-to-tip in metres of target wind turbine. Uses default blade-radius.
-
-    python3 openwindenergy.py [HEIGHT TO TIP] [BLADE RADIUS]
-    - Where 'HEIGHT TO TIP' is height-to-tip in metres and 'BLADE RADIUS' is blade-radius in metres of target wind turbine.
-
-    Possible additional arguments:
-
-    --custom               Supply custom YML configuration file. Can be local file path, internet url or name on CKAN open data portal (https://data.openwind.energy).
-    --clip                 Supply custom area for clipping. Uses OSM name from osm-boundaries.gpkg. Overrides any 'clipping' setting in custom YML.
-    --purgeall             Clear all downloads and database tables as if starting fresh.
-    --purgedb              Clear all PostGIS tables and reexport final layer files.
-    --purgederived         Clear all derived (ie. non-core data) PostGIS tables and reexport final layer files.
-    --purgeamalgamated     Clear all amalgamated PostGIS tables and reexport final layer files.
-    --skipdownload         Skip download stage and just do PostGIS processing.
-    --skipfonts            Skip font installation stage and use hosted version of openmaptiles fonts.
-    --regenerate dataset   Regenerate specific dataset by redownloading and recreating all tables relating to dataset.
-    --buildtileserver      Rebuild files for tileserver.
+    CLI to run openwindenergy
     """
 
     global SERVER_BUILD, PROCESSING_START
@@ -50,7 +39,7 @@ def main(
 
     PROCESSING_START = time.time()
 
-    make_folder(BUILD_FOLDER)
+    make_folder(Path(BUILD_FOLDER))
 
     if SERVER_BUILD:
         if isfile(PROCESSING_COMPLETE_FILE):
@@ -78,104 +67,62 @@ def main(
 
     LOG.info("Processing command line arguments...")
 
-    if len(sys.argv) > 1:
-        arg_index, height_to_tip_set, blade_radius_set = 0, False, False
-        for arg in sys.argv:
-            arg = arg.strip()
-            if isfloat(arg):
-                if not height_to_tip_set:
-                    HEIGHT_TO_TIP = float(arg)
-                    height_to_tip_set = True
-                    LOG.info("************ Using HEIGHT_TO_TIP value: " + formatValue(HEIGHT_TO_TIP) + ' metres ************')
-                else:
-                    BLADE_RADIUS = float(arg)
-                    blade_radius_set = True
-                    LOG.info("************ Using BLADE_RADIUS value: " + formatValue(BLADE_RADIUS) + ' metres ************')
+    if height_to_tip is not None:
+        HEIGHT_TO_TIP = float(height_to_tip)
+        LOG.info(f"************ Using HEIGHT_TO_TIP value: {format_float(HEIGHT_TO_TIP)} metres ************")
 
-            if arg == '--custom':
-                if len(sys.argv) > arg_index:
-                    customconfig = sys.argv[arg_index + 1]
-                    LOG.info("--custom argument passed: Using custom configuration '" + customconfig + "'")
-                    CUSTOM_CONFIGURATION = processCustomConfiguration(customconfig)
+    if blade_radius is not None:
+        BLADE_RADIUS = float(blade_radius)
+        LOG.info(f"************ Using BLADE_RADIUS value: {format_float(BLADE_RADIUS)} metres ************")
 
-            if arg == '--clip':
-                if len(sys.argv) > arg_index:
-                    # *** This will override any 'clipping' setting in '--custom', above
-                    clippingarea = sys.argv[arg_index + 1]
-                    LOG.info("--clip argument passed: Using custom clipping area '" + clippingarea + "'")
-                    CUSTOM_CONFIGURATION = processClippingArea(clippingarea)
+    if custom_config is not None:
+        LOG.info(f"--custom_config argument passed: Using custom configuration '{custom_config}'")
+        CUSTOM_CONFIGURATION = processCustomConfiguration(custom_config)
 
-            if arg == '--purgeall':
-                LOG.info("--purgeall argument passed: Clearing database and all build files")
-                REGENERATE_INPUT = True
-                REGENERATE_OUTPUT = True
-                purgeAll()
+    if clipping_area is not None:
+        if custom_config is not None:
+            LOG.warning(f"Clipping area '{clipping_area}' will override area defined in custom_config")
+        LOG.info(f"--clipping_area argument passed: Using custom clipping area '{clipping_area}'")
+        CUSTOM_CONFIGURATION = processClippingArea(clipping_area)
 
-            if arg == '--purgedb':
-                LOG.info("--purgedb argument passed: Clearing database")
-                REGENERATE_INPUT = True
-                REGENERATE_OUTPUT = True
-                postgisDropAllTables()
+    if purge_all:
+        LOG.info("--purgeall argument passed: Clearing database and all build files")
+        REGENERATE_INPUT = True
+        REGENERATE_OUTPUT = True
+        purgeAll()
 
-            if arg == '--purgederived':
-                LOG.info("--purgederived argument passed: Clearing derived database tables")
-                REGENERATE_OUTPUT = True
-                postgisDropDerivedTables()
+    if purge_db:
+        LOG.info("--purgedb argument passed: Clearing database")
+        REGENERATE_INPUT = True
+        REGENERATE_OUTPUT = True
+        postgisDropAllTables()
 
-            if arg == '--purgeamalgamated':
-                LOG.info("--purgeamalgamated argument passed: Clearing amalgamated database tables")
-                REGENERATE_OUTPUT = True
-                postgisDropAmalgamatedTables()
+    if purge_derived:
+        LOG.info("--purgederived argument passed: Clearing derived database tables")
+        REGENERATE_OUTPUT = True
+        postgisDropDerivedTables()
 
-            if arg == '--skipdownload':
-                LOG.info("--skipdownload argument passed: Skipping download stage")
-                PERFORM_DOWNLOAD = False
+    if purge_amalgamated:
+        LOG.info("--purgeamalgamated argument passed: Clearing amalgamated database tables")
+        REGENERATE_OUTPUT = True
+        postgisDropAmalgamatedTables()
 
-            if arg == '--skipfonts':
-                LOG.info("--skipfonts argument passed: Skipping font installation and using hosted CDN fonts")
-                SKIP_FONTS_INSTALLATION = True
+    if skip_download:
+        LOG.info("--skipdownload argument passed: Skipping download stage")
+        PERFORM_DOWNLOAD = False
 
-            if arg == '--buildtileserver':
-                LOG.info("--buildtileserver argument passed: Building files required for tileserver")
-                buildTileserverFiles()
-                exit()
+    if skip_fonts:
+        LOG.info("--skipfonts argument passed: Skipping font installation and using hosted CDN fonts")
+        SKIP_FONTS_INSTALLATION = True
 
-            if arg == '--regenerate':
-                if len(sys.argv) > arg_index:
-                    regeneratedataset = sys.argv[arg_index + 1]
-                    LOG.info("--regenerate argument passed: Redownloading and rebuilding all tables related to " + regeneratedataset)
-                    deleteDatasetAndAncestors(regeneratedataset)
+    if build_tile_server:
+        LOG.info("--buildtileserver argument passed: Building files required for tileserver")
+        buildTileserverFiles()
+        exit()
 
-            if arg == '--help':
-                print("""
-Command syntax:
-
-python3 openwindenergy.py
-- Uses default values for turbine height-to-tip and blade-radius values.
-
-python3 openwindenergy.py [HEIGHT TO TIP]
-- Where 'HEIGHT TO TIP' is height-to-tip in metres of target wind turbine. Uses default blade-radius.
-
-python3 openwindenergy.py [HEIGHT TO TIP] [BLADE RADIUS]
-- Where 'HEIGHT TO TIP' is height-to-tip in metres and 'BLADE RADIUS' is blade-radius in metres of target wind turbine.
-
-Possible additional arguments:
-
---custom               Supply custom YML configuration file. Can be local file path, internet url or name on CKAN open data portal (https://data.openwind.energy).
---clip                 Supply custom area for clipping. Uses OSM name from osm-boundaries.gpkg. Overrides any 'clipping' setting in custom YML.
---purgeall             Clear all downloads and database tables as if starting fresh.
---purgedb              Clear all PostGIS tables and reexport final layer files.
---purgederived         Clear all derived (ie. non-core data) PostGIS tables and reexport final layer files.
---purgeamalgamated     Clear all amalgamated PostGIS tables and reexport final layer files.
---skipdownload         Skip download stage and just do PostGIS processing.
---skipfonts            Skip font installation stage and use hosted version of openmaptiles fonts.
---regenerate dataset   Regenerate specific dataset by redownloading and recreating all tables relating to dataset.
---buildtileserver      Rebuild files for tileserver.
-
-""")
-                exit()
-
-            arg_index += 1
+    if regenerate_dataset is not None:
+        LOG.info("--regenerate argument passed: Redownloading and rebuilding all tables related to " + regeneratedataset)
+        deleteDatasetAndAncestors(regeneratedataset)
 
     initPipeline(rebuildCommandLine(sys.argv))
 
