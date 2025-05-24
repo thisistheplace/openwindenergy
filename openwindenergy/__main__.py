@@ -1,11 +1,11 @@
 from datetime import datetime
 import multiprocessing as mp
 import os
-from os.path import isfile
 import time
 import typer
 from typing_extensions import Annotated
 
+from .config import process_custom_config
 from .constants import *
 from .format import format_float
 from .postgis.manager import PostGisManager
@@ -86,13 +86,14 @@ def main(
     """
 
     global PROCESSING_START, CUSTOM_CONFIGURATION, REGENERATE_INPUT, REGENERATE_OUTPUT, SKIP_FONTS_INSTALLATION
+    global HEIGHT_TO_TIP, BLADE_RADIUS
 
     PROCESSING_START = time.time()
 
     make_folder(Path(BUILD_FOLDER))
 
     if SERVER_BUILD:
-        if isfile(PROCESSING_COMPLETE_FILE):
+        if PROCESSING_COMPLETE_FILE.is_file():
             LOG.info("Previous build run complete, aborting this run")
             exit(0)
 
@@ -135,7 +136,7 @@ def main(
         LOG.info(
             f"--custom_config argument passed: Using custom configuration '{custom_config}'"
         )
-        CUSTOM_CONFIGURATION = processCustomConfiguration(custom_config)
+        CUSTOM_CONFIGURATION = process_custom_config(custom_config)
 
     if clipping_area is not None:
         if custom_config is not None:
@@ -203,7 +204,7 @@ def main(
 
     with open(PROCESSING_COMPLETE_FILE, "w") as file:
         file.write("PROCESSINGCOMPLETE")
-    if isfile(PROCESSING_STATE_FILE):
+    if PROCESSING_STATE_FILE.is_file():
         os.remove(PROCESSING_STATE_FILE)
 
 
@@ -211,7 +212,7 @@ if __name__ == "__main__":
     init_logging()
 
     # Only remove log file on main thread
-    if isfile(LOG_SINGLE_PASS):
+    if LOG_SINGLE_PASS.is_file():
         os.remove(LOG_SINGLE_PASS)
 
     app = typer.Typer()

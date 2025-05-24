@@ -1,11 +1,10 @@
 from dotenv import load_dotenv
 import os
-from os.path import isfile
 from pathlib import Path
 import shutil
 
 # Ideally user has created own .env file. If not copy over template
-if not isfile(".env"):
+if not Path(".env").is_file():
     print("Default .env file not found, creating it from template")
     shutil.copy(".env-template", ".env")
 
@@ -95,8 +94,8 @@ CKAN_USER_AGENT = "ckanapi/1.0 (+https://openwind.energy)"
 DOWNLOAD_USER_AGENT = "openwindenergy/" + OPENWINDENERGY_VERSION
 LOG_SINGLE_PASS = WORKING_FOLDER + "log.txt"
 PROCESSING_START = None
-PROCESSING_STATE_FILE = "PROCESSING"
-PROCESSING_COMPLETE_FILE = "PROCESSINGCOMPLETE"
+PROCESSING_STATE_FILE = Path("PROCESSING")
+PROCESSING_COMPLETE_FILE = Path("PROCESSINGCOMPLETE")
 
 # Lookup to convert internal areas to OSM names
 OSM_NAME_CONVERT = {
@@ -121,3 +120,6 @@ OUTPUT_GRID_TABLE = "uk__output_grid__100000_m"
 
 # Redirect ogr2ogr warnings to log file
 os.environ["CPL_LOG"] = WORKING_FOLDER + "log-ogr2ogr.txt"
+
+YAML_EXT = ".yml"
+REQUEST_TIMEOUTS = 5  # in seconds
