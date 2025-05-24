@@ -15,7 +15,9 @@ def attempt_until_success(func: Callable) -> Any:
             try:
                 func(url, *args, **kwargs)
             except Exception as e:
-                LOG.warning(f"Attempt to access {url} failed so retrying")
+                LOG.warning(
+                    f"Attempt to access {url} failed so retrying, error message: {e}"
+                )
                 time.sleep(REQUEST_TIMEOUTS)
 
     return make_attempts

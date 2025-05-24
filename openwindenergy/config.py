@@ -2,8 +2,12 @@ from ckanapi import RemoteCKAN
 import multiprocessing as mp
 from pathlib import Path
 import urllib
+import yaml
 
 from .constants import *
+from .format import format_float
+from .http import download_until_success
+from .postgis import tables as pgistables
 from .io.dirs import make_folder
 from .standardise import reformat_dataset_name
 
@@ -55,15 +59,15 @@ def process_custom_config(custom_config: str | Path):
             # If matches, search for YML file in resources
             for resource in ckan_package["resources"]:
                 if "YML" in resource["format"]:
-                    attemptDownloadUntilSuccess(resource["url"], config_saved_path)
+                    download_until_success(resource["url"], config_saved_path)
                     config_downloaded = True
                     break
 
             if config_downloaded:
                 break
 
-    elif customconfig.startswith("http://") or customconfig.startswith("https://"):
-        attemptDownloadUntilSuccess(customconfig, config_saved_path)
+    elif custom_config.startswith("http://") or custom_config.startswith("https://"):
+        download_until_success(custom_config, config_saved_path)
         config_downloaded = True
 
     # Revert user-agent to defaults
@@ -71,13 +75,13 @@ def process_custom_config(custom_config: str | Path):
     urllib.request.install_opener(opener)
 
     if not config_downloaded:
-        if isfile(customconfig):
-            shutil.copy(customconfig, config_saved_path)
+        if custom_config.is_file():
+            shutil.copy(custom_config, config_saved_path)
             config_downloaded = True
 
     if not config_downloaded:
 
-        LOG.info("Unable to access custom configuration '" + customconfig + "'")
+        LOG.info(f"Unable to access custom configuration '{custom_config}'")
         LOG.info(" --> IGNORING CUSTOM CONFIGURATION")
 
         return None
@@ -87,11 +91,12 @@ def process_custom_config(custom_config: str | Path):
         try:
             yaml_content = yaml.safe_load(stream)
         except yaml.YAMLError as exc:
-            LogFatalError(exc)
+            LOG.error(exc)
+            raise exc
 
     if yaml_content is not None:
 
-        yaml_content["configuration"] = customconfig
+        yaml_content["configuration"] = custom_config
 
         # Dropping all custom configuration tables
         # If we don't do this, things gets very complicated if you start running things across many config files
@@ -106,19 +111,21 @@ def process_custom_config(custom_config: str | Path):
             "Custom configuration: Dropping previous custom configuration database tables"
         )
 
-        postgisDropCustomTables()
+        pgistables.drop_custom_tables()
 
     if "osm" in yaml_content:
         OSM_MAIN_DOWNLOAD = yaml_content["osm"]
         LOG.info("Custom configuration: Setting OSM download to " + yaml_content["osm"])
 
     if "tip-height" in yaml_content:
-        HEIGHT_TO_TIP = float(formatValue(yaml_content["tip-height"]))
-        LOG.info("Custom configuration: Setting tip-height to " + str(HEIGHT_TO_TIP))
+        height_to_tip_str = format_float(yaml_content["tip-height"])
+        HEIGHT_TO_TIP = float(height_to_tip_str)
+        LOG.info(f"Custom configuration: Setting tip-height to {height_to_tip_str}")
 
     if "blade-radius" in yaml_content:
-        BLADE_RADIUS = float(formatValue(yaml_content["blade-radius"]))
-        LOG.info("Custom configuration: Setting blade-radius to " + str(BLADE_RADIUS))
+        blade_radius_str = format_float(yaml_content["blade-radius"])
+        BLADE_RADIUS = float(blade_radius_str)
+        LOG.info(f"Custom configuration: Setting blade-radius to {blade_radius_str}")
 
     if "clipping" in yaml_content:
         LOG.info(
