@@ -18,5 +18,6 @@ h2o
 Jinja2
 flask
 validators
+type==0.15.4
 # geojson
 # turfpy
