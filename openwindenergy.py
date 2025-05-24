@@ -124,17 +124,6 @@ def getJSON(json_path):
 
     with open(json_path, "r") as json_file: return json.load(json_file)
 
-def getFilesInFolder(folderpath):
-    """
-    Get list of all files in folder
-    Create folder if it doesn't exist
-    """
-
-    makeFolder(folderpath)
-    files = [f for f in listdir(folderpath) if ((f != '.DS_Store') and (isfile(join(folderpath, f))))]
-    if files is not None: files.sort()
-    return files
-
 def LogOutOfMemoryAndQuit():
     """
     Logs out of memory message and quits
@@ -488,24 +477,6 @@ def postgisWaitRunning():
 
     LogMessage("Connection to PostGIS successful")
 
-def postgisGetAllTables():
-    """
-    Gets list of all tables
-    """
-
-    global POSTGRES_DB
-
-    all_tables = postgisGetResults(r"""
-    SELECT tables.table_name
-    FROM information_schema.tables
-    WHERE 
-    table_catalog=%s AND 
-    table_schema='public' AND 
-    table_type='BASE TABLE' AND
-    table_name NOT IN ('spatial_ref_sys')
-    ORDER BY table_name;
-    """, (POSTGRES_DB, ))
-    return [table[0] for table in all_tables]
 
 def postgisCheckTableExists(table_name):
     """
@@ -619,21 +590,6 @@ def postgisGetAmalgamatedTables():
     table_name NOT IN ('spatial_ref_sys') AND
     table_name LIKE 'tip\_%%';
     """, (POSTGRES_DB, ))
-
-def postgisDropAllTables():
-    """
-    Drops all tables in schema
-    """
-
-    global OSM_BOUNDARIES
-
-    # ignore_tables = [reformatTableName(OSM_BOUNDARIES)]
-    ignore_tables = []
-    all_tables = postgisGetAllTables()
-
-    for table in all_tables:
-        if table in ignore_tables: continue
-        postgisDropTable(table)
 
 def postgisDropDerivedTables():
     """
@@ -2505,86 +2461,6 @@ def downloadDataset(dataset_parameters):
                             "-s_srs", orig_srs, \
                             "-t_srs", WORKING_CRS])
         os.remove(temp_output_file)
-    
-def deleteFolderContentsKeepFolder(folder):
-    """
-    Deletes contents of folder but keep folder - needed for when docker compose manages folder mappings
-    """
-
-    if not isdir(folder): return
-
-    files = getFilesInFolder(folder)
-    for file in files: os.remove(folder + file)
-
-    subfolders = [ f.path for f in os.scandir(folder) if f.is_dir() ]
-
-    for subfolder in subfolders:
-        subfolder_absolute = os.path.abspath(subfolder)
-        if len(subfolder_absolute) < len(folder) or not subfolder_absolute.startswith(folder):
-            LogFatalError("Attempting to delete folder outside selected folder, aborting")
-        shutil.rmtree(subfolder_absolute)
-
-def purgeAll():
-    """
-    Deletes all database tables and build folder
-    """
-
-    global WORKING_FOLDER, BUILD_FOLDER, TILESERVER_FOLDER, OSM_DOWNLOADS_FOLDER, OSM_EXPORT_DATA, OSM_CONFIG_FOLDER, DATASETS_DOWNLOADS_FOLDER
-
-    postgisDropAllTables()
-
-    tileserver_folder_name = basename(TILESERVER_FOLDER[:-1])
-    build_files = getFilesInFolder(BUILD_FOLDER)
-    for build_file in build_files: 
-        # Don't delete log files from BUILD_FOLDER
-        if not build_file.endswith('.log'): os.remove(BUILD_FOLDER + build_file)
-    osm_files = getFilesInFolder(OSM_DOWNLOADS_FOLDER)
-    for osm_file in osm_files: os.remove(OSM_DOWNLOADS_FOLDER + osm_file)
-    tileserver_files = getFilesInFolder(TILESERVER_FOLDER)
-    for tileserver_file in tileserver_files: os.remove(TILESERVER_FOLDER + tileserver_file)
-
-    pwd = os.path.dirname(os.path.realpath(__file__))
-
-    # Delete items in BUILD_FOLDER
-
-    subfolders = [ f.path for f in os.scandir(BUILD_FOLDER) if f.is_dir() ]
-    absolute_build_folder = os.path.abspath(BUILD_FOLDER)
-
-    for subfolder in subfolders:
-
-        # Don't delete 'postgres' folder as managed by separate docker instance
-        # Don't delete 'tileserver' folder yet as some elements are managed separately 
-        # Don't delete 'landcover' and 'coastline' folders as managed by docker compose 
-        if basename(subfolder) in ['postgres', tileserver_folder_name, 'coastline', 'landcover']: continue
-
-        subfolder_absolute = os.path.abspath(subfolder)
-
-        if len(subfolder_absolute) < len(absolute_build_folder) or not subfolder_absolute.startswith(absolute_build_folder):
-            LogFatalError("Attempting to delete folder outside build folder, aborting")
-
-        shutil.rmtree(subfolder_absolute)
-
-    # Delete all items in 'landcover' and 'coastline' folders but keep folders in case managed by docker
-
-    deleteFolderContentsKeepFolder(WORKING_FOLDER + 'coastline/')
-    deleteFolderContentsKeepFolder(WORKING_FOLDER + 'landcover/')
-
-    # Delete selected items in TILESERVER_FOLDER
-
-    subfolders = [ f.path for f in os.scandir(TILESERVER_FOLDER) if f.is_dir() ]
-    absolute_tileserver_folder = os.path.abspath(TILESERVER_FOLDER)
-
-    for subfolder in subfolders:
-
-        # Don't delete 'fonts' as this is created by openwindenergy-fonts
-        if basename(subfolder) in ['fonts']: continue
-
-        subfolder_absolute = os.path.abspath(subfolder)
-
-        if len(subfolder_absolute) < len(absolute_tileserver_folder) or not subfolder_absolute.startswith(absolute_tileserver_folder):
-            LogFatalError("Attempting to delete folder outside tileserver folder, aborting")
-
-        shutil.rmtree(subfolder_absolute)
 
 def createGridClippedFile(table_name, core_dataset_name, file_path):
     """
