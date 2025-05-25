@@ -8,7 +8,7 @@ from .constants import *
 from .format import format_float
 from .http import download_until_success
 from .postgis import tables as pgistables
-from .io.dirs import make_folder
+from .system.dirs import make_folder
 from .standardise import reformat_dataset_name
 
 LOG = mp.get_logger()

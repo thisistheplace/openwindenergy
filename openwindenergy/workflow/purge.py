@@ -2,7 +2,7 @@ import multiprocessing as mp
 from pathlib import Path
 
 from ..constants import *
-from ..io.dirs import get_dir_files, delete_dir_contents
+from ..system.dirs import list_files, delete_dir_contents
 from ..postgis import tables as pgistables
 
 LOG = mp.get_logger()
@@ -18,15 +18,15 @@ def purge_all():
     pgistables.drop_all_tables()
 
     tileserver_folder_name = TILESERVER_FOLDER.parent.name
-    build_files = get_dir_files(BUILD_FOLDER)
+    build_files = list_files(BUILD_FOLDER)
     for build_file in build_files:
         # Don't delete log files from BUILD_FOLDER
         if not build_file.endswith(".log"):
             os.remove(BUILD_FOLDER + build_file)
-    osm_files = get_dir_files(OSM_DOWNLOADS_FOLDER)
+    osm_files = list_files(OSM_DOWNLOADS_FOLDER)
     for osm_file in osm_files:
         os.remove(OSM_DOWNLOADS_FOLDER + osm_file)
-    tileserver_files = get_dir_files(TILESERVER_FOLDER)
+    tileserver_files = list_files(TILESERVER_FOLDER)
     for tileserver_file in tileserver_files:
         os.remove(TILESERVER_FOLDER + tileserver_file)
 

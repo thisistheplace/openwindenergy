@@ -11,7 +11,7 @@ from .format import format_float
 from .postgis.manager import PostGisManager
 from .postgis import tables as pgistables
 from .logging import init_logging
-from .io.dirs import make_folder
+from .system.dirs import make_folder
 from .workflow.clipping_area import process_clipping_area
 from .workflow.purge import purge_all
 

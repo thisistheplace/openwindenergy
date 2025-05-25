@@ -15,7 +15,7 @@ def make_folder(folderpath: Path):
         makedirs(folderpath)
 
 
-def get_dir_files(folderpath: Path):
+def list_files(folderpath: Path):
     """
     Get list of all files in folder
     Create folder if it doesn't exist
@@ -40,7 +40,7 @@ def delete_dir_contents(folder: Path):
     if not folder.is_dir():
         return
 
-    files = get_dir_files(folder)
+    files = list_files(folder)
     for file in files:
         (folder / file).unlink()
 
