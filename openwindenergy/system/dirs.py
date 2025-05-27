@@ -2,11 +2,12 @@ import multiprocessing as mp
 from os import makedirs, listdir, scandir
 from pathlib import Path
 import shutil
+from typing import List
 
 LOG = mp.get_logger()
 
 
-def make_folder(folderpath: Path):
+def make_folder(folderpath: Path) -> None:
     """
     Make folder if it doesn't already exist
     """
@@ -15,7 +16,7 @@ def make_folder(folderpath: Path):
         makedirs(folderpath)
 
 
-def list_files(folderpath: Path):
+def list_files(folderpath: Path) -> List[Path]:
     """
     Get list of all files in folder
     Create folder if it doesn't exist
@@ -23,7 +24,7 @@ def list_files(folderpath: Path):
     folderpath = Path(folderpath)
     make_folder(folderpath)
     files = [
-        f
+        Path(f)
         for f in listdir(folderpath)
         if ((f != ".DS_Store") and (folderpath / f).is_file())
     ]
@@ -32,7 +33,7 @@ def list_files(folderpath: Path):
     return files
 
 
-def delete_dir_contents(folder: Path):
+def delete_dir_contents(folder: Path) -> None:
     """
     Deletes contents of folder but keep folder - needed for when docker compose manages folder mappings
     """

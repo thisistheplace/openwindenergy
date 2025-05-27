@@ -19,7 +19,7 @@ def normalizeTitle(title):
     return title
 
 
-def removeCustomConfigurationTablePrefix(layername):
+def remove_custom_config_table_prefix(layername):
     """
     Remove CUSTOM_CONFIGURATION_TABLE_PREFIX if set
     """
@@ -70,7 +70,7 @@ def reformat_dataset_name(datasettitle: str) -> str:
 
     datasettitle = normalizeTitle(datasettitle)
     datasettitle = datasettitle.replace(".geojson", "").replace(".gpkg", "")
-    datasettitle = removeCustomConfigurationTablePrefix(datasettitle)
+    datasettitle = remove_custom_config_table_prefix(datasettitle)
     datasettitle = removeCustomConfigurationFilePrefix(datasettitle)
     reformat_mapping = {
         " - ": "--",

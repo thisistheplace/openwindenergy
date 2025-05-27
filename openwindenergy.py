@@ -239,51 +239,6 @@ def reformatGeoJSON(file_path):
 
     with open(file_path, "w") as json_file: json.dump(geojson_data, json_file) 
 
-def osmDownloadData():
-    """
-    Downloads core OSM data
-    """
-
-    global  BUILD_FOLDER, OSM_MAIN_DOWNLOAD, OSM_DOWNLOADS_FOLDER, TILEMAKER_DOWNLOAD_SCRIPT, TILEMAKER_COASTLINE, TILEMAKER_LANDCOVER, TILEMAKER_COASTLINE_CONFIG
-
-    makeFolder(BUILD_FOLDER)
-    makeFolder(OSM_DOWNLOADS_FOLDER)
-
-    if not isfile(OSM_DOWNLOADS_FOLDER + basename(OSM_MAIN_DOWNLOAD)):
-
-        LogMessage("Downloading latest OSM data")
-
-        # Download to temp file in case download interrupted for any reason, eg. user clicks 'Stop processing'
-
-        download_temp = OSM_DOWNLOADS_FOLDER + 'temp.pbf'
-        if isfile(download_temp): os.remove(download_temp)
-
-        runSubprocess(["wget", OSM_MAIN_DOWNLOAD, "-O", download_temp])
-
-        shutil.copy(download_temp, OSM_DOWNLOADS_FOLDER + basename(OSM_MAIN_DOWNLOAD))
-        if isfile(download_temp): os.remove(download_temp)
-
-    LogMessage("Checking all files required for OSM tilemaker...")
-
-    shp_extensions = ['shp', 'shx', 'dbf', 'prj']
-    tilemaker_config_json = getJSON(TILEMAKER_COASTLINE_CONFIG)
-    tilemaker_config_layers = list(tilemaker_config_json['layers'].keys())
-
-    all_tilemaker_layers_downloaded = True
-    for layer in tilemaker_config_layers:
-        layer_elements = tilemaker_config_json['layers'][layer]
-        if 'source' in layer_elements:
-            for shp_extension in shp_extensions:
-                source_file = layer_elements['source'].replace('.shp', '.' + shp_extension)
-                if not isfile(source_file):
-                    LogMessage("Missing file for OSM tilemaker: " + source_file)
-                    all_tilemaker_layers_downloaded = False
-
-    if all_tilemaker_layers_downloaded:
-        LogMessage("All files downloaded for OSM tilemaker")
-    else:
-        LogMessage("Downloading global water and coastline data for OSM tilemaker")
-        runSubprocess([TILEMAKER_DOWNLOAD_SCRIPT])
 
 # ***********************************************************
 # **************** Multiprocessing functions ****************
@@ -477,21 +432,6 @@ def postgisWaitRunning():
 
     LogMessage("Connection to PostGIS successful")
 
-
-def postgisCheckTableExists(table_name):
-    """
-    Checks whether table already exists
-    """
-
-    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
-
-    table_name = table_name.replace("-", "_")
-    conn = psycopg2.connect(host=POSTGRES_HOST, dbname=POSTGRES_DB, user=POSTGRES_USER, password=POSTGRES_PASSWORD)
-    cur = conn.cursor()
-    cur.execute("SELECT EXISTS(SELECT * FROM information_schema.tables WHERE table_name=%s);", (table_name, ))
-    tableexists = cur.fetchone()[0]
-    cur.close()
-    return tableexists
 
 def postgisCheckColumnExists(table_name, column_name):
     """
@@ -781,26 +721,6 @@ def postgisAmalgamateAndDissolve(amalgamate_parameters):
     if postgisCheckTableExists(scratch_table_2): postgisDropTable(scratch_table_2)
     if postgisCheckTableExists(scratch_table_3): postgisDropTable(scratch_table_3)
 
-def postgisGetTableBounds(table_name):
-    """
-    Get bounds of all geometries in table
-    """
-
-    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
-
-    conn = psycopg2.connect(host=POSTGRES_HOST, dbname=POSTGRES_DB, user=POSTGRES_USER, password=POSTGRES_PASSWORD)
-    cur = conn.cursor()
-    cur.execute("""
-    SELECT 
-        MIN(ST_XMin(geom)) AS left,
-        MIN(ST_YMin(geom)) AS bottom,
-        MAX(ST_XMax(geom)) AS right,
-        MAX(ST_YMax(geom)) AS top FROM %s;
-    """, (AsIs(table_name), ))
-    left, bottom, right, top = cur.fetchone()
-    conn.close()
-    return {'left': left, 'bottom': bottom, 'right': right, 'top': top}
-
 def subprocessGetLayerName(subprocess_array):
     """
     Gets layer name from subprocess array
@@ -871,65 +791,6 @@ def checkGPKGIsValid(file_path, layer_name, inputs):
 # **************** Standardisation functions ****************
 # ***********************************************************
 
-def reformatDatasetName(datasettitle):
-    """
-    Reformats dataset title for compatibility purposes
-
-    - Removes .geojson or .gpkg file extension
-    - Replaces spaces with hyphen
-    - Replaces ' - ' with double hyphen
-    - Replaces _ with hyphen
-    - Standardises local variations in dataset names, eg. 'Areas of Special Scientific Interest' (Northern Ireland) -> 'Sites of Special Scientific Interest'
-    - For specific very long dataset names, eg. 'Public roads, A and B roads and motorways', shorten as this breaks PostGIS when adding prefixes/suffixes
-    - Remove CUSTOM_CONFIGURATION_TABLE_PREFIX and CUSTOM_CONFIGURATION_FILE_PREFIX
-    """
-
-    datasettitle = normalizeTitle(datasettitle)
-    datasettitle = datasettitle.replace('.geojson', '').replace('.gpkg', '')
-    datasettitle = removeCustomConfigurationTablePrefix(datasettitle)
-    datasettitle = removeCustomConfigurationFilePrefix(datasettitle)
-    reformatted_name = datasettitle.lower().replace(' - ', '--').replace(' ','-').replace('_','-').replace('(', '').replace(')', '')
-    reformatted_name = reformatted_name.replace('public-roads-a-and-b-roads-and-motorways', 'public-roads-a-b-motorways')
-    reformatted_name = reformatted_name.replace('areas-of-special-scientific-interest', 'sites-of-special-scientific-interest')
-    reformatted_name = reformatted_name.replace('conservation-area-boundaries', 'conservation-areas')
-    reformatted_name = reformatted_name.replace('scheduled-historic-monument-areas', 'scheduled-ancient-monuments')
-    reformatted_name = reformatted_name.replace('priority-habitats--woodland', 'ancient-woodlands')
-    reformatted_name = reformatted_name.replace('local-wildlife-reserves', 'local-nature-reserves')
-    reformatted_name = reformatted_name.replace('national-scenic-areas-equiv-to-aonb', 'areas-of-outstanding-natural-beauty')
-    reformatted_name = reformatted_name.replace('explosive-safeguarded-areas,-danger-areas-near-ranges', 'danger-areas')
-    reformatted_name = reformatted_name.replace('separation-distance-to-residential-properties', 'separation-distance-from-residential')
-
-    return reformatted_name
-
-def normalizeTitle(title):
-    """
-    Converts local variants to use same name
-    eg. Areas of Special Scientific Interest -> Sites of Special Scientific Interest
-    """
-
-    title = title.replace('Areas of Special Scientific Interest', 'Sites of Special Scientific Interest')
-    title = title.replace('Conservation Area Boundaries', 'Conservation Areas')
-    title = title.replace('Scheduled Historic Monument Areas', 'Scheduled Ancient Monuments')
-    title = title.replace('Priority Habitats - Woodland', 'Ancient woodlands')
-    title = title.replace('National Scenic Areas (equiv to AONB)', 'Areas of Outstanding Natural Beauty')
-
-    return title
-
-def reformatTableName(name):
-    """
-    Reformats names, eg. dataset names, to be compatible with Postgres
-    Also adds in CUSTOM_CONFIGURATION_TABLE_PREFIX in case we're using custom configuration file§
-    """
-
-    global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_TABLE_PREFIX
-
-    table = reformatTableNameAbsolute(name)
-
-    if CUSTOM_CONFIGURATION is not None:
-        if not table.startswith(CUSTOM_CONFIGURATION_TABLE_PREFIX): table = CUSTOM_CONFIGURATION_TABLE_PREFIX + table
-
-    return table
-
 def getDatasetReadableTitle(dataset):
     """
     Gets readable title from dataset internal code
@@ -957,42 +818,6 @@ def buildClippedLayerPath(folder, layername):
 
     return folder + layername.replace('.gpkg', '') + '--clp.gpkg'
 
-def buildBufferTableName(layername, buffer):
-    """
-    Builds buffer table name
-    """
-
-    return reformatTableName(layername) + '__buf_' + buffer.replace(".", "_") + 'm'
-
-def buildProcessedTableName(layername):
-    """
-    Builds processed table name
-    """
-
-    return reformatTableName(layername) + '__pro'
-
-def buildUnionTableName(layername):
-    """
-    Builds union table name
-    """
-
-    return reformatTableName(layername) + '__union'
-
-def removeCustomConfigurationTablePrefix(layername):
-    """
-    Remove CUSTOM_CONFIGURATION_TABLE_PREFIX if set
-    """
-
-    global CUSTOM_CONFIGURATION_TABLE_PREFIX
-
-    custom_configuration_prefix_table_style = CUSTOM_CONFIGURATION_TABLE_PREFIX.replace('-', '_')
-    custom_configuration_prefix_dataset_style = CUSTOM_CONFIGURATION_TABLE_PREFIX.replace('_', '-')
-
-    if layername.startswith(custom_configuration_prefix_table_style): layername = layername[len(custom_configuration_prefix_table_style):]
-    elif layername.startswith(custom_configuration_prefix_dataset_style): layername = layername[len(custom_configuration_prefix_dataset_style):]
-
-    return layername
-
 def removeCustomConfigurationFilePrefix(layername):
     """
     Remove CUSTOM_CONFIGURATION_FILE_PREFIX if set
@@ -1008,28 +833,6 @@ def removeCustomConfigurationFilePrefix(layername):
 
     return layername
 
-def buildTurbineParametersPrefix():
-    """
-    Builds turbine parameters prefix that is used in table names and output files
-    """
-
-    global HEIGHT_TO_TIP, BLADE_RADIUS
-
-    return "tip_" + formatValue(HEIGHT_TO_TIP).replace(".", "_") + "m_bld_" + formatValue(BLADE_RADIUS).replace(".", "_") + "m__"
-
-def buildFinalLayerTableName(layername):
-    """
-    Builds final layer table name
-    Test for whether layer is turbine-height dependent and if so incorporate HEIGHT_TO_TIP and BLADE_RADIUS parameters into name
-    """
-
-    dataset_parent = getDatasetParent(layername)
-    dataset_parent_no_custom = removeCustomConfigurationTablePrefix(dataset_parent)
-
-    if isTurbineHeightDependent(dataset_parent_no_custom):
-        return reformatTableName(buildTurbineParametersPrefix() + reformatTableNameAbsolute(dataset_parent_no_custom))
-    return reformatTableName("tip_any__" + reformatTableNameAbsolute(dataset_parent_no_custom))
-
 def formatValue(value):
     """
     Formats float value to be short and readable
@@ -1037,79 +840,16 @@ def formatValue(value):
 
     return str(round(value, 1)).replace('.0', '')
 
-def getOutputFileOriginalTable(output_file_path):
-    """
-    Gets original table used to generate output file
-    """
-
-    global HEIGHT_TO_TIP, CUSTOM_CONFIGURATION_FILE_PREFIX
-
-    output_file_basename = basename(output_file_path).split(".")[0]
-    original_table_name = reformatTableName(output_file_basename).replace("latest__", "").replace(CUSTOM_CONFIGURATION_FILE_PREFIX.replace("-", "_"), "")
-
-    if 'tip_' not in original_table_name: original_table_name = buildFinalLayerTableName(original_table_name)
-
-    return original_table_name
-
-def getCoreDatasetName(file_path):
-    """
-    Gets core dataset name from file path
-    Core dataset = 'description--location', eg 'national-parks--scotland'
-    Remove any 'custom--', 'latest--' or 'tip-..--' prefixes that may have been added to file name
-    """
-
-    global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_FILE_PREFIX, LATEST_OUTPUT_FILE_PREFIX
-
-    file_basename = basename(file_path).split(".")[0]
-
-    if CUSTOM_CONFIGURATION is not None:
-        if file_basename.startswith(CUSTOM_CONFIGURATION_FILE_PREFIX):
-            file_basename = file_basename[len(CUSTOM_CONFIGURATION_FILE_PREFIX):]
-
-    if file_basename.startswith(LATEST_OUTPUT_FILE_PREFIX) or file_basename.startswith('tip-'):
-        elements = file_basename.split("--")
-        file_basename = "--".join(elements[1:])
-
-    elements = file_basename.split("--")
-    return "--".join(elements[0:2])
-
 def getFinalLayerCoreDatasetName(table_name):
     """
     Gets core dataset name from final layer table name
     """
 
-    dataset_name = reformatDatasetName(table_name)
+    dataset_name = reformat_dataset_name(table_name)
     if dataset_name.startswith('tip'): dataset_name = '--'.join(dataset_name.split('--')[1:])
     return dataset_name
 
-def getFinalLayerLatestName(table_name):
-    """
-    Gets latest name from table name, eg. 'tip-135m-bld-40m--ecology-and-wildlife...' -> 'latest--ecology-and-wildlife...'
-    If CUSTOM_CONFIGURATION, add CUSTOM_CONFIGURATION_FILE_PREFIX
-    """
-
-    global LATEST_OUTPUT_FILE_PREFIX, CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_FILE_PREFIX
-
-    custom_configuration_prefix = ''
-    if CUSTOM_CONFIGURATION is not None: custom_configuration_prefix = CUSTOM_CONFIGURATION_FILE_PREFIX
-
-    dataset_name = reformatDatasetName(table_name)
-    elements = dataset_name.split("--")
-    if len(elements) > 1: latest_name = custom_configuration_prefix + LATEST_OUTPUT_FILE_PREFIX + "--".join(elements[1:])
-    else: latest_name = custom_configuration_prefix + LATEST_OUTPUT_FILE_PREFIX + dataset_name
-
-    return latest_name
-
-def getDatasetParent(file_path):
-    """
-    Gets dataset parent name from file path
-    Parent = 'description', eg 'national-parks' in 'national-parks--scotland'
-    """
-
-    file_basename = basename(file_path).split(".")[0]
-    return "--".join(file_basename.split("--")[0:1])
-
-def getDatasetParentTitle(title):
+def get_dataset_parentTitle(title):
     """
     Gets parent of dataset and normalizes specific values
     """
@@ -1178,7 +918,7 @@ def deleteDatasetTables(dataset, all_tables):
     possible_tables = []
     possible_tables.append(table)
     possible_tables.append(buildProcessedTableName(table))
-    possible_tables.append(buildFinalLayerTableName(table))
+    possible_tables.append(build_final_layer_table_name(table))
     if buffer is not None:
         bufferedTable = buildBufferTableName(table, buffer)
         possible_tables.append(bufferedTable)
@@ -1206,8 +946,8 @@ def deleteAncestors(dataset, all_tables=None):
 
     LogMessage("Deleting files and tables derived from: " + dataset)
 
-    dataset = reformatDatasetName(dataset)
-    core_dataset = getCoreDatasetName(dataset)
+    dataset = reformat_dataset_name(dataset)
+    core_dataset = core_dataset_name(dataset)
     ancestors = getAllAncestors(core_dataset, include_initial_dataset=False)
 
     for ancestor in ancestors:
@@ -1228,68 +968,13 @@ def deleteDatasetAndAncestors(dataset, all_tables=None):
 
     LogMessage("Deleting files and tables derived from: " + dataset)
 
-    dataset = reformatDatasetName(dataset)
-    core_dataset = getCoreDatasetName(dataset)
+    dataset = reformat_dataset_name(dataset)
+    core_dataset = core_dataset_name(dataset)
     ancestors = getAllAncestors(core_dataset)
 
     for ancestor in ancestors:
         deleteDatasetFiles(ancestor)
         deleteDatasetTables(ancestor, all_tables)
-
-def isSpecificDatasetHeightDependent(dataset_name):
-    """
-    Returns true or false, depending on whether specific dataset (ignoring children) is turbine-height dependent
-    """
-
-    buffer_lookup = getBufferLookup()
-    if dataset_name in buffer_lookup:
-        buffer_value = str(buffer_lookup[dataset_name])
-        if 'height-to-tip' in buffer_value: return True
-        if 'blade-radius' in buffer_value: return True
-    return False
-
-def isTurbineHeightDependent(dataset_name):
-    """
-    Returns true or false, depending on whether dataset is turbine-height dependent
-    """
-
-    global FINALLAYERS_CONSOLIDATED
-
-    structure_lookup = getStructureLookup()
-    dataset_name = reformatDatasetName(dataset_name)
-
-    # We assume overall layer is turbine-height dependent
-    if dataset_name == FINALLAYERS_CONSOLIDATED: return True
-
-    children_lookup = {}
-    groups = list(structure_lookup.keys())
-    for group in groups:
-        group_children = list(structure_lookup[group].keys())
-        children_lookup[group] = group_children
-        for group_child in group_children:
-            children_lookup[group_child] = structure_lookup[group][group_child]
-
-    core_dataset_name = getCoreDatasetName(dataset_name)
-    alldescendants = getAllDescendants(children_lookup, core_dataset_name)
-
-    for descendant in alldescendants:
-        if isSpecificDatasetHeightDependent(descendant): return True
-    return False
-
-def getAllDescendants(children_lookup, dataset_name):
-    """
-    Gets all descendants of dataset
-    """
-
-    alldescendants = set()
-    if dataset_name in children_lookup:
-        for child in children_lookup[dataset_name]:
-            alldescendants.add(child)
-            descendants = getAllDescendants(children_lookup, child)
-            for descendant in descendants:
-                alldescendants.add(descendant)
-        return list(alldescendants)
-    else: return []
 
 def getAllAncestors(dataset_name, include_initial_dataset=True):
     """
@@ -1305,12 +990,12 @@ def getAllAncestors(dataset_name, include_initial_dataset=True):
 
     # Add parent
 
-    parent = getDatasetParent(dataset_name)
+    parent = get_dataset_parent(dataset_name)
     if parent not in allancestors: allancestors.append(parent)
 
     # Finally check which group grandparent - if any - parent is in
 
-    structure_lookup = getStructureLookup()
+    structure_lookup = load_json(STRUCTURE_LOOKUP)
     groups = list(structure_lookup.keys())
     for group in groups:
         group_children = list(structure_lookup[group].keys())
@@ -1356,7 +1041,7 @@ def generateStructureLookups(ckanpackages):
     }]
 
     for ckanpackage in ckanpackages.keys():
-        ckanpackage_group = reformatDatasetName(ckanpackage)
+        ckanpackage_group = reformat_dataset_name(ckanpackage)
         structure_lookup[ckanpackage_group] = []
         finallayer_name = getFinalLayerLatestName(ckanpackage_group)
         style_item =   {
@@ -1370,11 +1055,11 @@ def generateStructureLookups(ckanpackages):
                         }
         children = {}
         for dataset in ckanpackages[ckanpackage]['datasets']:
-            dataset_code = reformatDatasetName(dataset['title'])
-            dataset_parent = getDatasetParent(dataset_code)
+            dataset_code = reformat_dataset_name(dataset['title'])
+            dataset_parent = get_dataset_parent(dataset_code)
             if dataset_parent not in children:
                 children[dataset_parent] =   {
-                                                'title': getDatasetParentTitle(dataset['title']),
+                                                'title': get_dataset_parentTitle(dataset['title']),
                                                 'color': ckanpackages[ckanpackage]['color'],
                                                 'dataset': getFinalLayerLatestName(dataset_parent),
                                                 'level': 2,
@@ -1441,51 +1126,18 @@ def generateBufferLookup(ckanpackages):
     for ckanpackage in ckanpackages.keys():
         for dataset in ckanpackages[ckanpackage]['datasets']:
             if 'buffer' in dataset:
-                dataset_title = reformatDatasetName(dataset['title'])
+                dataset_title = reformat_dataset_name(dataset['title'])
                 if dataset['buffer'] is not None:
                     buffer_lookup[dataset_title] = dataset['buffer']
 
     with open(BUFFER_LOOKUP, "w") as json_file: json.dump(buffer_lookup, json_file, indent=4)
-
-def getOSMLookup():
-    """
-    Get OSM lookup JSON
-    """
-
-    global OSM_LOOKUP
-    return getJSON(OSM_LOOKUP)
-
-def getStructureLookup():
-    """
-    Get structure lookup JSON
-    """
-
-    global STRUCTURE_LOOKUP
-    return getJSON(STRUCTURE_LOOKUP)
-
-def getBufferLookup():
-    """
-    Get buffer lookup JSON
-    """
-
-    global BUFFER_LOOKUP
-    return getJSON(BUFFER_LOOKUP)
-
-def getStyleLookup():
-    """
-    Get style lookup JSON
-    """
-
-    global STYLE_LOOKUP
-
-    return getJSON(STYLE_LOOKUP)
 
 def getStructureDatasets():
     """
     Gets flat list of all datasets in structure
     """
 
-    structure_lookup = getStructureLookup()
+    structure_lookup = load_json(STRUCTURE_LOOKUP)
     datasets = []
     for group in structure_lookup.keys():
         for parent in structure_lookup[group].keys():
@@ -1500,7 +1152,7 @@ def getDatasetBuffer(datasetname):
 
     global HEIGHT_TO_TIP, BLADE_RADIUS
 
-    buffer_lookup = getBufferLookup()
+    buffer_lookup = load_json(BUFFER_LOOKUP)
     if datasetname not in buffer_lookup: return None
 
     try:
@@ -1609,18 +1261,18 @@ def getCKANPackages(ckanurl):
 
         custom_datasets = None
         if custom_groups is not None:
-            if reformatDatasetName(sorted_group) not in custom_groups: continue
-            custom_datasets = custom_groups[reformatDatasetName(sorted_group)]
+            if reformat_dataset_name(sorted_group) not in custom_groups: continue
+            custom_datasets = custom_groups[reformat_dataset_name(sorted_group)]
 
-        if reformatDatasetName(sorted_group) in custom_style:
-            custom_group_style = custom_style[reformatDatasetName(sorted_group)]
+        if reformat_dataset_name(sorted_group) in custom_style:
+            custom_group_style = custom_style[reformat_dataset_name(sorted_group)]
             if 'color' in custom_group_style: color = custom_group_style['color']
 
         groups[sorted_group] = {'title': ckan_group['title'], 'color': color, 'datasets': []}
         sorted_packages = sorted(selectedgroups[sorted_group].keys())
         for sorted_package in sorted_packages:
             dataset = selectedgroups[sorted_group][sorted_package]
-            dataset_code = reformatDatasetName(dataset['title'])
+            dataset_code = reformat_dataset_name(dataset['title'])
             if custom_datasets is not None:
                 if dataset_code not in custom_datasets: continue
                 if dataset_code in custom_buffers: dataset['buffer'] = custom_buffers[dataset_code]
@@ -1661,14 +1313,14 @@ def processCustomConfiguration(customconfig):
 
         ckan = RemoteCKAN(CKAN_URL, user_agent=CKAN_USER_AGENT)
         packages = ckan.action.package_list(id='data-explorer')
-        config_code = reformatDatasetName(config_basename)
+        config_code = reformat_dataset_name(config_basename)
 
         for package in packages:
             ckan_package = ckan.action.package_show(id=package)
 
             # Check to see if name of customconfig matches CKAN reformatted package title 
 
-            if reformatDatasetName(ckan_package['title'].strip()) != config_code: continue
+            if reformat_dataset_name(ckan_package['title'].strip()) != config_code: continue
 
             # If matches, search for YML file in resources
 
@@ -1830,11 +1482,11 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
 
     global DOWNLOAD_USER_AGENT
     global CUSTOM_CONFIGURATION, CUSTOM_CONFIGURATION_FILE_PREFIX, OSM_NAME_CONVERT, OVERALL_CLIPPING_FILE
-    global REGENERATE_OUTPUT, BUILD_FOLDER, OSM_DOWNLOADS_FOLDER, OSM_MAIN_DOWNLOAD, OSM_CONFIG_FOLDER, WORKING_CRS, OSM_EXPORT_DATA
+    global REGENERATE_OUTPUT, BUILD_FOLDER, OSM_DOWNLOADS_FOLDER, OSM_MAIN_DOWNLOAD, load_json(OSM_LOOKUP)_FOLDER, WORKING_CRS, OSM_EXPORT_DATA
     global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
 
     makeFolder(BUILD_FOLDER)
-    makeFolder(OSM_CONFIG_FOLDER)
+    makeFolder(load_json(OSM_LOOKUP)_FOLDER)
     makeFolder(output_folder)
 
     osmDownloadData()
@@ -1854,7 +1506,7 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
 
     yaml_all_filename = custom_prefix + 'all.yml'
 
-    osm_layers, yaml_all_content, yaml_all_path = [], {}, OSM_CONFIG_FOLDER + yaml_all_filename
+    osm_layers, yaml_all_content, yaml_all_path = [], {}, load_json(OSM_LOOKUP)_FOLDER + yaml_all_filename
     existing_yaml_content = None
     rerun_osm_export_tool = False
 
@@ -1865,11 +1517,11 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
         for dataset in ckanpackages[ckanpackage]['datasets']:
             if dataset['type'] != 'osm-export-tool YML': continue
 
-            dataset_title = reformatDatasetName(dataset['title'])
+            dataset_title = reformat_dataset_name(dataset['title'])
             dataset_titles.append(dataset_title)
             url_basename = basename(dataset['url'])
             downloaded_yml = dataset_title + ".yml"
-            downloaded_yml_fullpath = OSM_CONFIG_FOLDER + downloaded_yml
+            downloaded_yml_fullpath = load_json(OSM_LOOKUP)_FOLDER + downloaded_yml
             queue_download.append(["Downloading osm-export-tool YML: " + url_basename + " -> " + downloaded_yml, dataset['url'], downloaded_yml_fullpath])
 
     multiprocessDownload(queue_download)
@@ -1877,7 +1529,7 @@ def downloadDatasetsSinglePass(ckanurl, output_folder):
     for dataset_title in dataset_titles:
         yaml_content = None
         downloaded_yml = dataset_title + ".yml"
-        downloaded_yml_fullpath = OSM_CONFIG_FOLDER + downloaded_yml
+        downloaded_yml_fullpath = load_json(OSM_LOOKUP)_FOLDER + downloaded_yml
         
         with open(downloaded_yml_fullpath) as stream:
             try:
@@ -1957,7 +1609,7 @@ def downloadDataset(dataset_parameters):
 
     dataset_index, dataset, output_folder = dataset_parameters[0], dataset_parameters[1], dataset_parameters[2]
 
-    dataset_title = reformatDatasetName(dataset['title'])
+    dataset_title = reformat_dataset_name(dataset['title'])
     feature_name = dataset['title']
     feature_layer_url = dataset['url']
     temp_base = join(TEMP_FOLDER, 'temp_' + str(dataset_index))
@@ -2299,32 +1951,6 @@ def downloadDataset(dataset_parameters):
                             "-s_srs", orig_srs, \
                             "-t_srs", WORKING_CRS])
         os.remove(temp_output_file)
-
-def createGridClippedFile(table_name, core_dataset_name, file_path):
-    """
-    Create grid clipped version of file to improve rendering and performance when used as mbtiles
-    """
-
-    global OUTPUT_GRID_TABLE
-
-    scratch_table_1 = '_scratch_table_1'
-    output_grid = reformatTableName(OUTPUT_GRID_TABLE)
-
-    if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
-
-    postgisExec("CREATE TABLE %s AS SELECT (ST_Dump(ST_Intersection(layer.geom, grid.geom))).geom geom FROM %s layer, %s grid;", \
-                (AsIs(scratch_table_1), AsIs(table_name), AsIs(output_grid), ))
-
-    inputs = runSubprocess(["ogr2ogr", \
-                    file_path, \
-                    'PG:host=' + POSTGRES_HOST + ' user=' + POSTGRES_USER + ' password=' + POSTGRES_PASSWORD + ' dbname=' + POSTGRES_DB, \
-                    "-overwrite", \
-                    "-nln", core_dataset_name, \
-                    scratch_table_1, \
-                    "-s_srs", WORKING_CRS, \
-                    "-t_srs", 'EPSG:4326'])
-
-    if postgisCheckTableExists(scratch_table_1): postgisDropTable(scratch_table_1)
 
 def initPipeline(command_line):
     """
@@ -2694,7 +2320,7 @@ def runProcessingOnDownloads(output_folder):
     custom_prefix = ''
     if CUSTOM_CONFIGURATION is not None: custom_prefix = CUSTOM_CONFIGURATION_FILE_PREFIX
 
-    osm_layers = getOSMLookup()
+    osm_layers = load_json(OSM_LOOKUP)
     osm_export_file = BUILD_FOLDER + custom_prefix + OSM_EXPORT_DATA + '.gpkg'
     osm_export_projection = getGPKGProjection(osm_export_file)
 
@@ -2866,7 +2492,7 @@ def runProcessingOnDownloads(output_folder):
     for downloaded_file in downloaded_files:
         queue_index += 1
 
-        core_dataset_name = getCoreDatasetName(downloaded_file)
+        core_dataset_name = core_dataset_name(downloaded_file)
 
         # reformatTableName will add CUSTOM_CONFIGURATION_TABLE_PREFIX to table name if using custom configuration file
 
@@ -2910,7 +2536,7 @@ def runProcessingOnDownloads(output_folder):
     LogMessage("Adding buffers to PostGIS and clipping all tables...")
     LogMessage("------------------------------------------------------------")
 
-    structure_lookup = getStructureLookup()
+    structure_lookup = load_json(STRUCTURE_LOOKUP)
     groups = structure_lookup.keys()
     parents_lookup = {}
 
@@ -2965,8 +2591,8 @@ def runProcessingOnDownloads(output_folder):
     amalgamate_id, finallayers, queue_dict = 0, [], {}
     parents = parents_lookup.keys()
     for parent in parents:
-        parent_table = buildFinalLayerTableName(parent)
-        finallayers.append(reformatDatasetName(parent_table))
+        parent_table = build_final_layer_table_name(parent)
+        finallayers.append(reformat_dataset_name(parent_table))
         parent_table_exists = postgisCheckTableExists(parent_table)
         if REGENERATE_OUTPUT or (not parent_table_exists):
             amalgamate_id += 1
@@ -3006,8 +2632,8 @@ def runProcessingOnDownloads(output_folder):
     for group in groups:
         group_items = list((structure_lookup[group]).keys())
         if group_items is None: continue
-        group_table = buildFinalLayerTableName(group)
-        finallayers.append(reformatDatasetName(group_table))
+        group_table = build_final_layer_table_name(group)
+        finallayers.append(reformat_dataset_name(group_table))
         group_table_exists = postgisCheckTableExists(group_table)
         group_items.sort()
         if REGENERATE_OUTPUT or (not group_table_exists):
@@ -3018,7 +2644,7 @@ def runProcessingOnDownloads(output_folder):
             if group_table_exists: postgisDropTable(group_table)
             # Delete any tables and files that are derived from this table
             deleteDatasetAndAncestors(group_table)
-            children = [buildFinalLayerTableName(table_name) for table_name in group_items]
+            children = [build_final_layer_table_name(table_name) for table_name in group_items]
             table_size_children = 0
             for child in children: table_size_children += postgisGetTableSize(child)
             queue_dict_index = str(table_size_children) + "." + str(amalgamate_id)
@@ -3047,15 +2673,15 @@ def runProcessingOnDownloads(output_folder):
 
     LogMessage("Amalgamating and dissolving all groups as single overall layer...")
 
-    alllayers_table = buildFinalLayerTableName(FINALLAYERS_CONSOLIDATED)
-    final_file_geojson = FINALLAYERS_OUTPUT_FOLDER + custom_configuration_prefix + reformatDatasetName(alllayers_table) + '.geojson'
-    final_file_gpkg = FINALLAYERS_OUTPUT_FOLDER + custom_configuration_prefix + reformatDatasetName(alllayers_table) + '.gpkg'
-    finallayers.append(reformatDatasetName(alllayers_table))
+    alllayers_table = build_final_layer_table_name(FINALLAYERS_CONSOLIDATED)
+    final_file_geojson = FINALLAYERS_OUTPUT_FOLDER + custom_configuration_prefix + reformat_dataset_name(alllayers_table) + '.geojson'
+    final_file_gpkg = FINALLAYERS_OUTPUT_FOLDER + custom_configuration_prefix + reformat_dataset_name(alllayers_table) + '.gpkg'
+    finallayers.append(reformat_dataset_name(alllayers_table))
     alllayers_table_exists = postgisCheckTableExists(alllayers_table)
     if REGENERATE_OUTPUT or (not alllayers_table_exists):
         amalgamate_output = "Amalgamating and dissolving single overall layer: " + FINALLAYERS_CONSOLIDATED
         if alllayers_table_exists: postgisDropTable(alllayers_table)
-        children = [buildFinalLayerTableName(table_name) for table_name in groups]
+        children = [build_final_layer_table_name(table_name) for table_name in groups]
         multiprocessAmalgamateAndDissolve([0, amalgamate_output, alllayers_table, children, PROCESSING_GRID_TABLE])
 
     LogMessage("============================================================")
@@ -3216,64 +2842,6 @@ To view latest wind constraint layers as map, enter:
 
     else:
         LogMessage("ERROR: Failed to created one or more final files")
-
-def installTileserverFonts():
-    """
-    Installs fonts required for tileserver-gl
-    """
-
-    global BUILD_FOLDER, TILESERVER_FOLDER
-
-    LogMessage("Attempting tileserver fonts installation...")
-
-    tileserver_font_folder = TILESERVER_FOLDER + 'fonts/'
-
-    if BUILD_FOLDER == 'build-docker/':
-
-        # On docker openwindenergy-fonts container copies fonts to 'fonts/' folder
-        # So need to wait for it to finish this
-
-        while True:
-            if isdir(tileserver_font_folder):
-                LogMessage("Tileserver fonts folder already exists - SUCCESS")
-                return True
-            time.sleep(5)
-
-    else:
-
-        # Server build clones fonts from https://github.com/open-wind/openmaptiles-fonts.git
-        if isdir(tileserver_font_folder): return True
-
-        # Download tileserver fonts
-
-        if not isdir(basename(TILESERVER_FONTS_GITHUB)):
-
-            LogMessage("Downloading tileserver fonts")
-
-            inputs = runSubprocess(["git", "clone", TILESERVER_FONTS_GITHUB])
-
-        working_dir = os.getcwd()
-        os.chdir(basename(TILESERVER_FONTS_GITHUB))
-
-        LogMessage("Generating PBF fonts")
-
-        if not runSubprocessReturnBoolean(["npm", "install"]):
-            os.chdir(working_dir)
-            return False
-
-        if not runSubprocessReturnBoolean(["node", "./generate.js"]):
-            os.chdir(working_dir)
-            return False
-
-        os.chdir(working_dir)
-
-        LogMessage("Copying PBF fonts to tileserver folder")
-
-        tileserver_font_folder_src = basename(TILESERVER_FONTS_GITHUB) + '/_output'
-
-        shutil.copytree(tileserver_font_folder_src, tileserver_font_folder)
-
-        return True
 
 def buildQGISFile():
     """

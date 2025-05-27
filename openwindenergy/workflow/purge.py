@@ -21,14 +21,14 @@ def purge_all():
     build_files = list_files(BUILD_FOLDER)
     for build_file in build_files:
         # Don't delete log files from BUILD_FOLDER
-        if not build_file.endswith(".log"):
-            os.remove(BUILD_FOLDER + build_file)
+        if not build_file.suffix == ".log":
+            (BUILD_FOLDER / build_file).unlink()
     osm_files = list_files(OSM_DOWNLOADS_FOLDER)
     for osm_file in osm_files:
-        os.remove(OSM_DOWNLOADS_FOLDER + osm_file)
+        (OSM_DOWNLOADS_FOLDER / osm_file).unlink()
     tileserver_files = list_files(TILESERVER_FOLDER)
     for tileserver_file in tileserver_files:
-        os.remove(TILESERVER_FOLDER + tileserver_file)
+        (TILESERVER_FOLDER / tileserver_file).unlink()
 
     pwd = os.path.dirname(os.path.realpath(__file__))
 

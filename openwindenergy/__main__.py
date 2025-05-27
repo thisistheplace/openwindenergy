@@ -8,7 +8,7 @@ from typing_extensions import Annotated
 from .config import process_custom_config
 from .constants import *
 from .format import format_float
-from .postgis.manager import PostGisManager
+from .postgis.manager import Db
 from .postgis import tables as pgistables
 from .logging import init_logging
 from .system.dirs import make_folder
@@ -118,7 +118,7 @@ def main(
     LOG.info("***********************************************************************")
     LOG.info("")
 
-    pg_manager = PostGisManager()
+    pg_manager = Db()
     pg_manager.connect()
 
     LOG.info("Processing command line arguments...")
@@ -191,9 +191,9 @@ def main(
     if regenerate_dataset is not None:
         LOG.info(
             "--regenerate argument passed: Redownloading and rebuilding all tables related to "
-            + regeneratedataset
+            + regenerate_dataset
         )
-        deleteDatasetAndAncestors(regeneratedataset)
+        deleteDatasetAndAncestors(regenerate_dataset)
 
     initPipeline(rebuildCommandLine(sys.argv))
 

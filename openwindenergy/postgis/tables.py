@@ -2,74 +2,23 @@ import multiprocessing as mp
 import psycopg2
 from psycopg2.extensions import AsIs
 
+from .manager import Db
 from ..constants import *
+from ..standardise import reformat_dataset_name
+from ..system.process import run_subprocess
 
 LOG = mp.get_logger()
-
-
-def pgis_exec(sql_text, sql_parameters):
-    """
-    Executes SQL statement
-    """
-
-    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
-
-    conn = psycopg2.connect(
-        host=POSTGRES_HOST,
-        dbname=POSTGRES_DB,
-        user=POSTGRES_USER,
-        password=POSTGRES_PASSWORD,
-        keepalives=1,
-        keepalives_idle=30,
-        keepalives_interval=5,
-        keepalives_count=5,
-    )
-    cur = conn.cursor()
-    cur.execute(sql_text, sql_parameters)
-    conn.commit()
-    conn.close()
-
-
-def drop_table(table_name):
-    """
-    Drops PostGIS table
-    """
-
-    pgis_exec("DROP TABLE IF EXISTS %s", (AsIs(table_name),))
-
-
-def get_results(sql_text, sql_parameters):
-    """
-    Runs database query and returns results
-    """
-
-    global POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
-
-    conn = psycopg2.connect(
-        host=POSTGRES_HOST,
-        dbname=POSTGRES_DB,
-        user=POSTGRES_USER,
-        password=POSTGRES_PASSWORD,
-    )
-    cur = conn.cursor()
-    cur.execute(sql_text, sql_parameters)
-    results = cur.fetchall()
-    conn.close()
-    return results
 
 
 def get_custom_tables():
     """
     Gets list of all custom configuration tables in database
     """
-
-    global CUSTOM_CONFIGURATION_TABLE_PREFIX
-
     custom_configuration_prefix_escape = CUSTOM_CONFIGURATION_TABLE_PREFIX.replace(
         r"_", r"\_"
     )
 
-    return get_results(
+    return Db().fetch_all(
         r"""
     SELECT tables.table_name
     FROM information_schema.tables
@@ -94,10 +43,11 @@ def drop_custom_tables():
 
     customtables = get_custom_tables()
 
+    db = Db()
     for table in customtables:
         (table_name,) = table
         LOG.info(f" --> Dropping custom table: {table_name}")
-        drop_table(table_name)
+        db.drop_table(table_name)
 
 
 def get_all_tables():
@@ -105,7 +55,7 @@ def get_all_tables():
     Gets list of all tables
     """
 
-    all_tables = get_results(
+    all_tables = Db().fetch_all(
         r"""
     SELECT tables.table_name
     FROM information_schema.tables
@@ -126,16 +76,14 @@ def drop_all_tables():
     Drops all tables in schema
     """
 
-    global OSM_BOUNDARIES
-
-    # ignore_tables = [reformatTableName(OSM_BOUNDARIES)]
     ignore_tables = []
     all_tables = get_all_tables()
 
+    db = Db()
     for table in all_tables:
         if table in ignore_tables:
             continue
-        drop_table(table)
+        db.drop_table(table)
 
 
 def get_derived_tables():
@@ -148,7 +96,7 @@ def get_derived_tables():
     # Any 'pro'cessed
     # Any final layer 'tip_...'
 
-    return get_results(
+    return Db().get_results(
         r"""
     SELECT tables.table_name
     FROM information_schema.tables
@@ -177,9 +125,10 @@ def drop_derived_tables():
 
     derivedtables = get_derived_tables()
 
+    db = Db()
     for table in derivedtables:
         (table_name,) = table
-        drop_table(table_name)
+        db.drop_table(table_name)
 
 
 def reformat_table_name_absolute(name):
@@ -196,7 +145,7 @@ def get_amalgamated_tables():
     Gets list of all amalgamated tables in database
     """
 
-    return get_results(
+    return Db().get_results(
         r"""
     SELECT tables.table_name
     FROM information_schema.tables
@@ -215,13 +164,13 @@ def postgisDropLegacyTables():
     """
     Drops all legacy tables in schema
     """
-
     legacytables = get_legacy_tables()
 
+    db = Db()
     for table in legacytables:
         (table_name,) = table
         LOG.info("Removing legacy table: " + table_name)
-        drop_table(table_name)
+        db.drop_table(table_name)
 
 
 def drop_amalgamated_tables():
@@ -230,12 +179,12 @@ def drop_amalgamated_tables():
     """
 
     LOG.info(" --> Dropping all tip_... tables")
-
     derivedtables = get_amalgamated_tables()
 
+    db = Db()
     for table in derivedtables:
         (table_name,) = table
-        drop_table(table_name)
+        db.drop_table(table_name)
 
 
 def get_legacy_tables():
@@ -247,7 +196,7 @@ def get_legacy_tables():
     # public_roads_a_and_b_roads_and_motorways__uk
     # tipheight_...
 
-    return get_results(
+    return Db().get_results(
         r"""
     SELECT tables.table_name
     FROM information_schema.tables
@@ -263,3 +212,119 @@ def get_legacy_tables():
     """,
         (POSTGRES_DB,),
     )
+
+
+def reformat_table_name(name):
+    """
+    Reformats names, eg. dataset names, to be compatible with Postgres
+    Also adds in CUSTOM_CONFIGURATION_TABLE_PREFIX in case we're using custom configuration file§
+    """
+
+    global CUSTOM_CONFIGURATION
+
+    table = reformat_table_name_absolute(name)
+
+    if CUSTOM_CONFIGURATION is not None:
+        if not table.startswith(CUSTOM_CONFIGURATION_TABLE_PREFIX):
+            table = CUSTOM_CONFIGURATION_TABLE_PREFIX + table
+
+    return table
+
+
+def buildBufferTableName(layername, buffer):
+    """
+    Builds buffer table name
+    """
+
+    return reformat_table_name(layername) + "__buf_" + buffer.replace(".", "_") + "m"
+
+
+def buildProcessedTableName(layername):
+    """
+    Builds processed table name
+    """
+
+    return reformat_table_name(layername) + "__pro"
+
+
+def build_union_table_name(layername):
+    """
+    Builds union table name
+    """
+
+    return reformat_table_name(layername) + "__union"
+
+
+def get_final_layer_latest_name(table_name):
+    """
+    Gets latest name from table name, eg. 'tip-135m-bld-40m--ecology-and-wildlife...' -> 'latest--ecology-and-wildlife...'
+    If CUSTOM_CONFIGURATION, add CUSTOM_CONFIGURATION_FILE_PREFIX
+    """
+
+    global CUSTOM_CONFIGURATION
+
+    custom_configuration_prefix = ""
+    if CUSTOM_CONFIGURATION is not None:
+        custom_configuration_prefix = CUSTOM_CONFIGURATION_FILE_PREFIX
+
+    dataset_name = reformat_dataset_name(table_name)
+    elements = dataset_name.split("--")
+    if len(elements) > 1:
+        latest_name = (
+            custom_configuration_prefix
+            + LATEST_OUTPUT_FILE_PREFIX
+            + "--".join(elements[1:])
+        )
+    else:
+        latest_name = (
+            custom_configuration_prefix + LATEST_OUTPUT_FILE_PREFIX + dataset_name
+        )
+
+    return latest_name
+
+
+def create_grid_clipped_file(table_name, core_dataset_name, file_path):
+    """
+    Create grid clipped version of file to improve rendering and performance when used as mbtiles
+    """
+    scratch_table_1 = "_scratch_table_1"
+    output_grid = reformat_table_name(OUTPUT_GRID_TABLE)
+
+    db = Db()
+    if db.table_exists(scratch_table_1):
+        db.drop_table(scratch_table_1)
+
+    db.exec(
+        "CREATE TABLE %s AS SELECT (ST_Dump(ST_Intersection(layer.geom, grid.geom))).geom geom FROM %s layer, %s grid;",
+        (
+            AsIs(scratch_table_1),
+            AsIs(table_name),
+            AsIs(output_grid),
+        ),
+    )
+
+    inputs = run_subprocess(
+        [
+            "ogr2ogr",
+            file_path,
+            "PG:host="
+            + POSTGRES_HOST
+            + " user="
+            + POSTGRES_USER
+            + " password="
+            + POSTGRES_PASSWORD
+            + " dbname="
+            + POSTGRES_DB,
+            "-overwrite",
+            "-nln",
+            core_dataset_name,
+            scratch_table_1,
+            "-s_srs",
+            WORKING_CRS,
+            "-t_srs",
+            "EPSG:4326",
+        ]
+    )
+
+    if db.table_exists(scratch_table_1):
+        db.drop_table(scratch_table_1)

@@ -23,7 +23,7 @@ SERVER_BUILD = False
 if os.environ.get("SERVER_BUILD") is not None:
     SERVER_BUILD = True
 if os.environ.get("BUILD_FOLDER") is not None:
-    BUILD_FOLDER = os.environ.get("BUILD_FOLDER")
+    BUILD_FOLDER = Path(os.environ.get("BUILD_FOLDER"))
 if os.environ.get("QGIS_PYTHON_PATH") is not None:
     QGIS_PYTHON_PATH = os.environ.get("QGIS_PYTHON_PATH")
 if os.environ.get("CKAN_URL") is not None:
@@ -36,7 +36,7 @@ TEMP_FOLDER = "temp/"
 USE_MULTIPROCESSING = True
 if SERVER_BUILD:
     USE_MULTIPROCESSING = True
-if BUILD_FOLDER == "build-docker/":
+if BUILD_FOLDER == Path("build-docker"):
     USE_MULTIPROCESSING = False
 DEFAULT_HEIGHT_TO_TIP = 124.2  # Based on openwind's own manual data on all large (>=75 m to tip-height) failed and successful UK onshore wind projects
 DEFAULT_BLADE_RADIUS = 47.8  # Based on openwind's own manual data on all large (>=75 m to tip-height) failed and successful UK onshore wind projects
@@ -64,7 +64,7 @@ MAPAPP_JS_BOUNDS_CENTER = MAPAPP_FOLDER / "bounds-centre.js"
 MAPAPP_MAXBOUNDS = [[-49.262695, 38.548165], [39.990234, 64.848937]]
 MAPAPP_FITBOUNDS = None
 MAPAPP_CENTER = [-6, 55.273]
-TILESERVER_FONTS_GITHUB = "https://github.com/openmaptiles/fonts"
+TILESERVER_FONTS_GITHUB = Path("https://github.com/openmaptiles/fonts")
 TILESERVER_SRC_FOLDER = WORKING_FOLDER / "tileserver"
 TILESERVER_FOLDER = BUILD_FOLDER / "tileserver"
 TILESERVER_DATA_FOLDER = TILESERVER_FOLDER / "data"
